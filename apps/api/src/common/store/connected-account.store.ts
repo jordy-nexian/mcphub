@@ -21,7 +21,10 @@ export class ConnectedAccountStore {
   constructor(private readonly filePath: string) {}
 
   static createDefault() {
-    return new ConnectedAccountStore(path.resolve(process.cwd(), "../../data/connected-accounts.json"));
+    const dataDir = process.env.DATA_DIR
+      ? path.resolve(process.env.DATA_DIR)
+      : path.resolve(process.cwd(), "data");
+    return new ConnectedAccountStore(path.join(dataDir, "connected-accounts.json"));
   }
 
   private async readStore(): Promise<StoreShape> {
@@ -96,4 +99,3 @@ export class ConnectedAccountStore {
     await this.writeStore(store);
   }
 }
-

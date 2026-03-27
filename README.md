@@ -62,6 +62,28 @@ Environment variables to set in Vercel:
 
 This repo keeps `apps/api` and `apps/mcp` as separate Node services. For production, deploy those on a container host and point the Vercel frontend to them via environment variables.
 
+## Railway deployment
+
+Use Railway for the backend split:
+
+- `apps/api` on Railway
+- `apps/mcp` on Railway
+- `apps/web` on Vercel
+
+The practical setup guide is in:
+
+- `docs/railway-vercel-deploy.md`
+
+Important production env relationships:
+
+- `APP_URL` should be your Vercel web URL
+- `API_URL` should be your Railway API URL
+- `MCP_URL` should be your Railway MCP URL
+- `HALOPSA_REDIRECT_URI` should point to the Railway API callback URL
+- `NEXT_PUBLIC_API_URL` in Vercel should point to the Railway API URL
+- `NEXT_PUBLIC_MCP_URL` in Vercel should point to the Railway MCP invoke URL
+- `SESSION_SECRET` must match between the API and MCP services
+
 ## Product architecture
 
 - Web users authenticate with the platform and act within a tenant workspace.
