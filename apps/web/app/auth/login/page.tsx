@@ -29,6 +29,7 @@ export default function LoginPage() {
     try {
       const response = await fetch(`${apiOrigin}/auth/${mode}`, {
         method: "POST",
+        credentials: "include",
         headers: {
           "content-type": "application/json"
         },

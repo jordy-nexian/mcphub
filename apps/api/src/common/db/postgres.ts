@@ -44,6 +44,27 @@ export async function ensureDatabaseSchema() {
   `);
 
   await pool.query(`
+    CREATE TABLE IF NOT EXISTS oauth_authorization_codes (
+      code TEXT PRIMARY KEY,
+      client_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      tenant_id TEXT NOT NULL,
+      redirect_uri TEXT NOT NULL,
+      scope TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[],
+      code_challenge TEXT NULL,
+      code_challenge_method TEXT NULL,
+      expires_at TIMESTAMPTZ NOT NULL,
+      consumed_at TIMESTAMPTZ NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS oauth_authorization_codes_user_idx
+    ON oauth_authorization_codes (user_id, tenant_id);
+  `);
+
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS connected_accounts (
       id TEXT PRIMARY KEY,
       tenant_id TEXT NOT NULL,

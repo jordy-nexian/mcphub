@@ -1,3 +1,5 @@
+import crypto from "node:crypto";
+
 import type { FastifyReply, FastifyInstance } from "fastify";
 import { z } from "zod";
 
@@ -38,10 +40,31 @@ const loginSchema = z.object({
   password: z.string().min(8)
 });
 
+const oauthAuthorizeQuerySchema = z.object({
+  response_type: z.literal("code"),
+  client_id: z.string().min(1),
+  redirect_uri: z.string().url(),
+  state: z.string().optional(),
+  scope: z.string().optional(),
+  code_challenge: z.string().optional(),
+  code_challenge_method: z.enum(["plain", "S256"]).optional()
+});
+
+const oauthTokenSchema = z.object({
+  grant_type: z.enum(["authorization_code", "refresh_token"]),
+  code: z.string().optional(),
+  redirect_uri: z.string().url().optional(),
+  client_id: z.string().min(1),
+  client_secret: z.string().min(1),
+  code_verifier: z.string().optional(),
+  refresh_token: z.string().optional()
+});
+
 function applyCors(reply: FastifyReply, origin: string) {
   reply.header("access-control-allow-origin", origin);
   reply.header("access-control-allow-headers", "content-type, authorization");
   reply.header("access-control-allow-methods", "GET,POST,DELETE,OPTIONS");
+  reply.header("access-control-allow-credentials", "true");
 }
 
 function parsePlatformAuth(
@@ -55,13 +78,150 @@ function parsePlatformAuth(
   return authService.verifyPlatformToken(authorizationHeader.slice("Bearer ".length));
 }
 
+function parseCookies(cookieHeader: string | undefined) {
+  return Object.fromEntries(
+    (cookieHeader ?? "")
+      .split(";")
+      .map((part) => part.trim())
+      .filter(Boolean)
+      .map((part) => {
+        const separatorIndex = part.indexOf("=");
+        return [part.slice(0, separatorIndex), decodeURIComponent(part.slice(separatorIndex + 1))];
+      })
+  );
+}
+
+function parsePlatformAuthFromRequest(
+  request: { headers: { authorization?: string; cookie?: string } },
+  authService: AuthService
+) {
+  const bearer = parsePlatformAuth(request.headers.authorization, authService);
+  if (bearer) {
+    return bearer;
+  }
+
+  const cookies = parseCookies(request.headers.cookie);
+  if (!cookies.nexian_session) {
+    return undefined;
+  }
+
+  return authService.verifyPlatformToken(cookies.nexian_session);
+}
+
+function renderAuthorizeLoginPage(apiUrl: string, query: Record<string, string | undefined>, notice?: string) {
+  const encodedQuery = encodeURIComponent(JSON.stringify(query));
+  return `
+    <!DOCTYPE html>
+    <html lang="en">
+      <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <title>Nexian Login</title>
+        <style>
+          body { font-family: ui-sans-serif, system-ui, sans-serif; background: #0d1c24; color: #f3f4f6; padding: 40px; }
+          .card { max-width: 460px; margin: 60px auto; background: #152733; border: 1px solid #244556; border-radius: 18px; padding: 28px; }
+          input { width: 100%; padding: 12px; margin-top: 6px; margin-bottom: 14px; border-radius: 10px; border: 1px solid #355e74; background: #0f1b24; color: #fff; }
+          button { background: #0ea5a4; border: 0; color: #03141c; padding: 12px 16px; border-radius: 999px; font-weight: 700; cursor: pointer; }
+          .notice { background: rgba(245, 158, 11, 0.12); border: 1px solid rgba(245, 158, 11, 0.32); color: #fde68a; padding: 12px; border-radius: 12px; margin-bottom: 16px; }
+          .muted { color: #a9bbc6; }
+        </style>
+      </head>
+      <body>
+        <div class="card">
+          <p class="muted">Nexian MCP Login</p>
+          <h1>Sign in to continue</h1>
+          <p class="muted">Claude is requesting access to your Nexian MCP workspace.</p>
+          ${notice ? `<div class="notice">${notice}</div>` : ""}
+          <label>Email</label>
+          <input id="email" type="email" placeholder="admin@example.com" />
+          <label>Password</label>
+          <input id="password" type="password" placeholder="Your platform password" />
+          <button id="submit">Sign in</button>
+        </div>
+        <script>
+          const submit = document.getElementById("submit");
+          submit.addEventListener("click", async () => {
+            const response = await fetch("${apiUrl}/auth/login", {
+              method: "POST",
+              credentials: "include",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({
+                email: document.getElementById("email").value,
+                password: document.getElementById("password").value
+              })
+            });
+
+            if (!response.ok) {
+              const payload = await response.json().catch(() => ({}));
+              alert(payload.message || payload.error || "Could not sign in.");
+              return;
+            }
+
+            const query = JSON.parse(decodeURIComponent("${encodedQuery}"));
+            const params = new URLSearchParams(query);
+            window.location.href = "${apiUrl}/oauth/authorize?" + params.toString();
+          });
+        </script>
+      </body>
+    </html>
+  `;
+}
+
+function renderConsentPage(apiUrl: string, query: Record<string, string | undefined>, displayName: string) {
+  const params = new URLSearchParams(query as Record<string, string>);
+  const approveUrl = `${apiUrl}/oauth/authorize/approve?${params.toString()}`;
+  const denyUrl = `${apiUrl}/oauth/authorize/deny?${params.toString()}`;
+
+  return `
+    <!DOCTYPE html>
+    <html lang="en">
+      <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <title>Nexian Consent</title>
+        <style>
+          body { font-family: ui-sans-serif, system-ui, sans-serif; background: #0d1c24; color: #f3f4f6; padding: 40px; }
+          .card { max-width: 560px; margin: 60px auto; background: #152733; border: 1px solid #244556; border-radius: 18px; padding: 28px; }
+          .muted { color: #a9bbc6; }
+          .row { display: flex; gap: 12px; margin-top: 18px; }
+          .primary, .secondary { padding: 12px 16px; border-radius: 999px; text-decoration: none; font-weight: 700; }
+          .primary { background: #0ea5a4; color: #03141c; }
+          .secondary { border: 1px solid #355e74; color: #f3f4f6; }
+          code { background: #0f1b24; padding: 2px 6px; border-radius: 8px; }
+        </style>
+      </head>
+      <body>
+        <div class="card">
+          <p class="muted">Signed in as ${displayName}</p>
+          <h1>Authorize Claude</h1>
+          <p class="muted">Claude wants to access your Nexian MCP workspace and act using your connected tools.</p>
+          <p><strong>Requested scopes:</strong> <code>${query.scope ?? "mcp"}</code></p>
+          <div class="row">
+            <a class="primary" href="${approveUrl}">Approve</a>
+            <a class="secondary" href="${denyUrl}">Deny</a>
+          </div>
+        </div>
+      </body>
+    </html>
+  `;
+}
+
 export function registerApiRoutes(
   app: FastifyInstance,
   deps: {
     authService: AuthService;
     connectorService: ConnectorService;
     auditService: AuditService;
-    config: { apiUrl: string; appUrl: string; internalMcpSharedSecret: string; sessionSecret: string };
+    config: {
+      apiUrl: string;
+      appUrl: string;
+      internalMcpSharedSecret: string;
+      sessionSecret: string;
+      mcpOauthClientId: string;
+      mcpOauthClientSecret: string;
+      mcpOauthRedirectUris: string[];
+      mcpOauthScopes: string[];
+    };
   }
 ) {
   app.addHook("onRequest", async (_request, reply) => {
@@ -75,23 +235,203 @@ export function registerApiRoutes(
 
   app.get("/health", async () => ({ ok: true }));
 
-  app.post("/auth/register", async (request) => {
+  app.post("/auth/register", async (request, reply) => {
     const body = registerSchema.parse(request.body);
-    return deps.authService.register(body);
+    const session = await deps.authService.register(body);
+    reply.header("set-cookie", deps.authService.issueSessionCookie(session.token));
+    return session;
   });
 
-  app.post("/auth/login", async (request) => {
+  app.post("/auth/login", async (request, reply) => {
     const body = loginSchema.parse(request.body);
-    return deps.authService.login(body.email, body.password);
+    const session = await deps.authService.login(body.email, body.password);
+    reply.header("set-cookie", deps.authService.issueSessionCookie(session.token));
+    return session;
   });
 
   app.get("/auth/me", async (request, reply) => {
-    const auth = parsePlatformAuth(request.headers.authorization, deps.authService);
+    const auth = parsePlatformAuthFromRequest(request, deps.authService);
     if (!auth) {
       return reply.status(401).send({ error: "unauthorized" });
     }
 
     return deps.authService.getSession(auth);
+  });
+
+  app.get("/.well-known/oauth-authorization-server", async () => ({
+    issuer: deps.config.apiUrl,
+    authorization_endpoint: `${deps.config.apiUrl}/oauth/authorize`,
+    token_endpoint: `${deps.config.apiUrl}/oauth/token`,
+    response_types_supported: ["code"],
+    grant_types_supported: ["authorization_code", "refresh_token"],
+    token_endpoint_auth_methods_supported: ["client_secret_post", "client_secret_basic"],
+    code_challenge_methods_supported: ["plain", "S256"],
+    scopes_supported: deps.config.mcpOauthScopes
+  }));
+
+  app.get("/oauth/authorize", async (request, reply) => {
+    const query = oauthAuthorizeQuerySchema.parse(request.query);
+    if (query.client_id !== deps.config.mcpOauthClientId) {
+      return reply.status(400).send("Unknown OAuth client");
+    }
+
+    if (!deps.config.mcpOauthRedirectUris.includes(query.redirect_uri)) {
+      return reply.status(400).send("Redirect URI is not allowed");
+    }
+
+    const auth = parsePlatformAuthFromRequest(request, deps.authService);
+    if (!auth) {
+      reply.type("text/html").send(
+        renderAuthorizeLoginPage(deps.config.apiUrl, {
+          response_type: query.response_type,
+          client_id: query.client_id,
+          redirect_uri: query.redirect_uri,
+          state: query.state,
+          scope: query.scope,
+          code_challenge: query.code_challenge,
+          code_challenge_method: query.code_challenge_method
+        })
+      );
+      return;
+    }
+
+    reply.type("text/html").send(
+      renderConsentPage(
+        deps.config.apiUrl,
+        {
+          response_type: query.response_type,
+          client_id: query.client_id,
+          redirect_uri: query.redirect_uri,
+          state: query.state,
+          scope: query.scope,
+          code_challenge: query.code_challenge,
+          code_challenge_method: query.code_challenge_method
+        },
+        auth.displayName
+      )
+    );
+  });
+
+  app.get("/oauth/authorize/approve", async (request, reply) => {
+    const query = oauthAuthorizeQuerySchema.parse(request.query);
+    const auth = parsePlatformAuthFromRequest(request, deps.authService);
+    if (!auth) {
+      return reply.redirect(
+        `${deps.config.apiUrl}/oauth/authorize?${new URLSearchParams(query as Record<string, string>).toString()}`
+      );
+    }
+
+    const scope = (query.scope ?? "mcp").split(/\s+/).filter(Boolean);
+    const code = await deps.authService.createAuthorizationCode({
+      clientId: query.client_id,
+      userId: auth.userId,
+      tenantId: auth.tenantId,
+      redirectUri: query.redirect_uri,
+      scope,
+      codeChallenge: query.code_challenge,
+      codeChallengeMethod: query.code_challenge_method
+    });
+
+    const redirectUrl = new URL(query.redirect_uri);
+    redirectUrl.searchParams.set("code", code);
+    if (query.state) {
+      redirectUrl.searchParams.set("state", query.state);
+    }
+
+    return reply.redirect(redirectUrl.toString());
+  });
+
+  app.get("/oauth/authorize/deny", async (request, reply) => {
+    const query = oauthAuthorizeQuerySchema.parse(request.query);
+    const redirectUrl = new URL(query.redirect_uri);
+    redirectUrl.searchParams.set("error", "access_denied");
+    if (query.state) {
+      redirectUrl.searchParams.set("state", query.state);
+    }
+    return reply.redirect(redirectUrl.toString());
+  });
+
+  app.post("/oauth/token", async (request, reply) => {
+    const body = oauthTokenSchema.parse(request.body);
+
+    if (
+      body.client_id !== deps.config.mcpOauthClientId ||
+      body.client_secret !== deps.config.mcpOauthClientSecret
+    ) {
+      return reply.status(401).send({ error: "invalid_client" });
+    }
+
+    if (body.grant_type === "authorization_code") {
+      if (!body.code || !body.redirect_uri) {
+        return reply.status(400).send({ error: "invalid_request" });
+      }
+
+      const { code, user } = await deps.authService.consumeAuthorizationCode(
+        body.code,
+        body.client_id,
+        body.redirect_uri
+      );
+
+      if (code.code_challenge) {
+        if (!body.code_verifier) {
+          return reply.status(400).send({ error: "invalid_request", error_description: "Missing code_verifier" });
+        }
+
+        const computed =
+          code.code_challenge_method === "S256"
+            ? crypto.createHash("sha256").update(body.code_verifier).digest("base64url")
+            : body.code_verifier;
+
+        if (computed !== code.code_challenge) {
+          return reply.status(400).send({ error: "invalid_grant", error_description: "PKCE verification failed" });
+        }
+      }
+
+      return {
+        access_token: deps.authService.issueMcpAccessToken({
+          tenantId: user.tenant_id,
+          userId: user.id,
+          role: user.role,
+          email: user.email,
+          displayName: user.display_name
+        }),
+        refresh_token: deps.authService.issueMcpRefreshToken({
+          tenantId: user.tenant_id,
+          userId: user.id,
+          role: user.role,
+          email: user.email,
+          displayName: user.display_name
+        }),
+        token_type: "Bearer",
+        expires_in: 3600,
+        scope: code.scope.join(" ")
+      };
+    }
+
+    if (!body.refresh_token) {
+      return reply.status(400).send({ error: "invalid_request" });
+    }
+
+    const payload = deps.authService.verifyRefreshToken(body.refresh_token);
+    return {
+      access_token: deps.authService.issueMcpAccessToken({
+        tenantId: payload.tenantId,
+        userId: payload.userId,
+        role: payload.role,
+        email: payload.email,
+        displayName: payload.displayName
+      }),
+      refresh_token: deps.authService.issueMcpRefreshToken({
+        tenantId: payload.tenantId,
+        userId: payload.userId,
+        role: payload.role,
+        email: payload.email,
+        displayName: payload.displayName
+      }),
+      token_type: "Bearer",
+      expires_in: 3600,
+      scope: deps.config.mcpOauthScopes.join(" ")
+    };
   });
 
   app.get("/providers", async (request) => {

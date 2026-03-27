@@ -49,6 +49,10 @@ Set these on the API service:
 - `DATABASE_URL=<your-neon-url>`
 - `INTERNAL_MCP_SHARED_SECRET=<shared-secret-for-mcp-to-api-calls>`
 - `SESSION_SECRET=<strong-random-secret>`
+- `MCP_OAUTH_CLIENT_ID=claude`
+- `MCP_OAUTH_CLIENT_SECRET=<long-random-client-secret>`
+- `MCP_OAUTH_REDIRECT_URIS=https://claude.ai/api/mcp/auth_callback`
+- `MCP_OAUTH_SCOPES=mcp`
 - `OAUTH_STATE_SIGNING_SECRET=<strong-random-secret>`
 - `TOKEN_ENCRYPTION_KEY_BASE64=<32-byte-base64-key>`
 - `HALOPSA_BASE_URL=https://<your-halo-instance>`
@@ -81,7 +85,11 @@ Set these on the MCP service:
 - `INTERNAL_MCP_SHARED_SECRET=<the same value used by the API service>`
 - `SESSION_SECRET=<the same value used by the API service>`
 
-If you later switch to `MCP_AUTH_MODE=required`, the API and MCP services must share the same `SESSION_SECRET`, because the API issues the bearer token and the MCP service validates it.
+For real Claude/OpenAI connector auth, switch this to:
+
+- `MCP_AUTH_MODE=required`
+
+The API and MCP services must share the same `SESSION_SECRET`, because the API issues the bearer token and the MCP service validates it.
 
 ## 5. Health checks
 
@@ -112,7 +120,17 @@ Compatibility aliases are also available at:
 - `https://<your-mcp-service>.up.railway.app/mcp`
 - `https://<your-mcp-service>.up.railway.app/invoke`
 
-## 8. Current limitation
+## 8. Claude custom connector setup
+
+In Claude custom connector settings, use:
+
+- Server URL: `https://<your-mcp-service>.up.railway.app`
+- Client ID: the value of `MCP_OAUTH_CLIENT_ID`
+- Client Secret: the value of `MCP_OAUTH_CLIENT_SECRET`
+
+Claude will redirect the user to Nexian's OAuth authorize endpoint, the user signs in to Nexian, approves access, and Claude receives a user-scoped MCP token automatically.
+
+## 9. Current limitation
 
 Connected accounts are now stored in Postgres, which fixes the previous redeploy/reset problem.
 

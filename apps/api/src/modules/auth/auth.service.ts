@@ -32,6 +32,24 @@ export interface PlatformAuthContext {
   tokenType: "platform_session";
 }
 
+export interface McpTokenContext {
+  tenantId: string;
+  userId: string;
+  roles: string[];
+  email: string;
+  displayName: string;
+  tokenType: "mcp_access";
+}
+
+interface RefreshTokenContext {
+  tenantId: string;
+  userId: string;
+  role: string;
+  email: string;
+  displayName: string;
+  tokenType: "mcp_refresh";
+}
+
 type TenantRow = {
   id: string;
   slug: string;
@@ -45,6 +63,19 @@ type UserRow = {
   password_hash: string;
   display_name: string;
   role: string;
+};
+
+type AuthorizationCodeRow = {
+  code: string;
+  client_id: string;
+  user_id: string;
+  tenant_id: string;
+  redirect_uri: string;
+  scope: string[];
+  code_challenge: string | null;
+  code_challenge_method: string | null;
+  expires_at: Date;
+  consumed_at: Date | null;
 };
 
 function slugifyWorkspaceName(value: string) {
@@ -83,6 +114,14 @@ export class AuthService {
       config.sessionSecret,
       { expiresIn: "7d" }
     );
+  }
+
+  issueSessionCookie(token: string) {
+    return `nexian_session=${token}; Path=/; HttpOnly; Secure; SameSite=None; Max-Age=${60 * 60 * 24 * 7}`;
+  }
+
+  clearSessionCookie() {
+    return "nexian_session=; Path=/; HttpOnly; Secure; SameSite=None; Max-Age=0";
   }
 
   private async loadTenant(tenantId: string) {
@@ -200,5 +239,125 @@ export class AuthService {
       throw new Error("Invalid platform session token");
     }
     return payload;
+  }
+
+  issueMcpAccessToken(input: { tenantId: string; userId: string; role: string; email: string; displayName: string }) {
+    return jwt.sign(
+      {
+        tokenType: "mcp_access",
+        tenantId: input.tenantId,
+        userId: input.userId,
+        roles: [input.role],
+        email: input.email,
+        displayName: input.displayName
+      } satisfies McpTokenContext,
+      config.sessionSecret,
+      { expiresIn: "1h" }
+    );
+  }
+
+  issueMcpRefreshToken(input: { tenantId: string; userId: string; role: string; email: string; displayName: string }) {
+    return jwt.sign(
+      {
+        tokenType: "mcp_refresh",
+        tenantId: input.tenantId,
+        userId: input.userId,
+        role: input.role,
+        email: input.email,
+        displayName: input.displayName
+      } satisfies RefreshTokenContext,
+      config.sessionSecret,
+      { expiresIn: "30d" }
+    );
+  }
+
+  verifyRefreshToken(token: string): RefreshTokenContext {
+    const payload = jwt.verify(token, config.sessionSecret) as RefreshTokenContext;
+    if (payload.tokenType !== "mcp_refresh") {
+      throw new Error("Invalid refresh token");
+    }
+    return payload;
+  }
+
+  async createAuthorizationCode(input: {
+    clientId: string;
+    userId: string;
+    tenantId: string;
+    redirectUri: string;
+    scope: string[];
+    codeChallenge?: string;
+    codeChallengeMethod?: string;
+  }) {
+    await this.ready;
+
+    const code = crypto.randomBytes(32).toString("hex");
+    await pool.query(
+      `
+        INSERT INTO oauth_authorization_codes (
+          code,
+          client_id,
+          user_id,
+          tenant_id,
+          redirect_uri,
+          scope,
+          code_challenge,
+          code_challenge_method,
+          expires_at,
+          consumed_at,
+          created_at
+        ) VALUES (
+          $1, $2, $3, $4, $5, $6::text[], $7, $8, NOW() + interval '10 minutes', NULL, NOW()
+        )
+      `,
+      [
+        code,
+        input.clientId,
+        input.userId,
+        input.tenantId,
+        input.redirectUri,
+        input.scope,
+        input.codeChallenge ?? null,
+        input.codeChallengeMethod ?? null
+      ]
+    );
+
+    return code;
+  }
+
+  async consumeAuthorizationCode(code: string, clientId: string, redirectUri: string) {
+    await this.ready;
+
+    const result = await pool.query<AuthorizationCodeRow>(
+      `
+        UPDATE oauth_authorization_codes
+        SET consumed_at = NOW()
+        WHERE code = $1
+          AND client_id = $2
+          AND redirect_uri = $3
+          AND consumed_at IS NULL
+          AND expires_at > NOW()
+        RETURNING *
+      `,
+      [code, clientId, redirectUri]
+    );
+
+    const record = result.rows[0];
+    if (!record) {
+      throw new Error("Invalid or expired authorization code");
+    }
+
+    const userResult = await pool.query<UserRow>(
+      `SELECT id, tenant_id, email, password_hash, display_name, role FROM platform_users WHERE id = $1 LIMIT 1`,
+      [record.user_id]
+    );
+    const user = userResult.rows[0];
+    if (!user) {
+      throw new Error("User not found for authorization code");
+    }
+
+    return {
+      code: record,
+      user
+    };
   }
 }
