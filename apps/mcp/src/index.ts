@@ -19,13 +19,48 @@ import {
 
 const app = Fastify({ logger: true });
 const jwtSecret = process.env.SESSION_SECRET ?? "local-session-secret";
+const authMode = process.env.MCP_AUTH_MODE ?? "optional";
 const providers = getProviderRegistry();
 const toolCatalog = buildToolCatalog();
 const sessionAuth = new Map<string, AuthContext>();
 const heartbeatTimers = new WeakMap<NodeJS.WritableStream, NodeJS.Timeout>();
 
-function getAuthContext(authorization: string | undefined): AuthContext {
-  return parseBearerToken(authorization, jwtSecret);
+function getDefaultAuthContext(): AuthContext {
+  return {
+    tenantId: process.env.MCP_DEFAULT_TENANT_ID ?? "demo-tenant",
+    userId: process.env.MCP_DEFAULT_USER_ID ?? "demo-user",
+    roles: (process.env.MCP_DEFAULT_ROLES ?? "ADMIN")
+      .split(",")
+      .map((role) => role.trim())
+      .filter(Boolean)
+  };
+}
+
+function applyUnauthorized(reply: { code: (statusCode: number) => unknown; header: (name: string, value: string) => unknown }) {
+  const metadataUrl = `${process.env.MCP_URL ?? "http://localhost:4100"}/.well-known/oauth-protected-resource`;
+  reply.header(
+    "WWW-Authenticate",
+    `Bearer resource_metadata="${metadataUrl}", error="invalid_token", error_description="Bearer token required"`
+  );
+  reply.code(401);
+}
+
+function getAuthContext(
+  authorization: string | undefined,
+  reply?: { code: (statusCode: number) => unknown; header: (name: string, value: string) => unknown }
+): AuthContext {
+  if (authorization?.startsWith("Bearer ")) {
+    return parseBearerToken(authorization, jwtSecret);
+  }
+
+  if (authMode === "required") {
+    if (reply) {
+      applyUnauthorized(reply);
+    }
+    throw new Error("Missing bearer token");
+  }
+
+  return getDefaultAuthContext();
 }
 
 function validateSession(sessionId: string | undefined) {
@@ -76,7 +111,20 @@ function buildToolCallResult(output: NormalizedToolResponse) {
 
 function registerMcpHttpEndpoint(path: string) {
   app.get(path, async (request, reply) => {
-    getAuthContext(request.headers.authorization);
+    try {
+      getAuthContext(request.headers.authorization, reply);
+    } catch (error) {
+      if (reply.statusCode === 401) {
+        return reply.send({
+          jsonrpc: "2.0",
+          error: {
+            code: -32001,
+            message: "Unauthorized"
+          }
+        });
+      }
+      throw error;
+    }
     validateSession(request.headers["mcp-session-id"] as string | undefined);
 
     reply.raw.writeHead(200, {
@@ -113,7 +161,7 @@ function registerMcpHttpEndpoint(path: string) {
 
     try {
       if (rpc.method === "initialize") {
-        const auth = getAuthContext(request.headers.authorization);
+        const auth = getAuthContext(request.headers.authorization, reply);
         const params = initializeParamsSchema.parse(rpc.params ?? {});
         const sessionId = crypto.randomUUID();
         sessionAuth.set(sessionId, auth);
@@ -133,7 +181,7 @@ function registerMcpHttpEndpoint(path: string) {
         );
       }
 
-      const auth = getAuthContext(request.headers.authorization);
+      const auth = getAuthContext(request.headers.authorization, reply);
       validateSession(request.headers["mcp-session-id"] as string | undefined);
 
       if (rpc.method === "notifications/initialized") {

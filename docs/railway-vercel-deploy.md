@@ -74,9 +74,13 @@ Set these on the MCP service:
 - `PORT=4100`
 - `API_URL=https://<your-api-service>.up.railway.app`
 - `MCP_URL=https://<your-mcp-service>.up.railway.app`
+- `MCP_AUTH_MODE=optional`
+- `MCP_DEFAULT_TENANT_ID=demo-tenant`
+- `MCP_DEFAULT_USER_ID=demo-user`
+- `MCP_DEFAULT_ROLES=ADMIN`
 - `SESSION_SECRET=<the same value used by the API service>`
 
-The API and MCP services must share the same `SESSION_SECRET`, because the API issues the bearer token and the MCP service validates it.
+If you later switch to `MCP_AUTH_MODE=required`, the API and MCP services must share the same `SESSION_SECRET`, because the API issues the bearer token and the MCP service validates it.
 
 ## 5. Health checks
 
