@@ -1,0 +1,30 @@
+{
+  "name": "@nexian/api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "tsc -p tsconfig.json --noEmit",
+    "test": "node --test",
+    "prisma:generate": "DATABASE_URL=${DATABASE_URL:-postgresql://postgres:postgres@localhost:5432/nexian_mcp_hub} prisma generate --schema ../../prisma/schema.prisma",
+    "prisma:migrate": "DATABASE_URL=${DATABASE_URL:-postgresql://postgres:postgres@localhost:5432/nexian_mcp_hub} prisma migrate dev --schema ../../prisma/schema.prisma",
+    "prisma:push": "DATABASE_URL=${DATABASE_URL:-postgresql://postgres:postgres@localhost:5432/nexian_mcp_hub} prisma db push --schema ../../prisma/schema.prisma"
+  },
+  "dependencies": {
+    "@nexian/connectors": "workspace:*",
+    "@nexian/core": "workspace:*",
+    "@prisma/client": "^5.20.0",
+    "fastify": "^5.0.0",
+    "ioredis": "^5.4.1",
+    "jsonwebtoken": "^9.0.2",
+    "prisma": "^5.20.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/jsonwebtoken": "^9.0.7",
+    "tsx": "^4.19.1"
+  }
+}
