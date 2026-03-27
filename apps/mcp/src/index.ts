@@ -63,16 +63,6 @@ function getAuthContext(
   return getDefaultAuthContext();
 }
 
-function validateSession(sessionId: string | undefined) {
-  if (!sessionId) {
-    return;
-  }
-
-  if (!sessionAuth.has(sessionId)) {
-    throw new Error("Unknown MCP session");
-  }
-}
-
 async function executeTool(auth: AuthContext, name: string, input: Record<string, unknown>) {
   const response = await fetch(`${process.env.API_URL ?? "http://localhost:4000"}/internal/mcp/tools/call`, {
     method: "POST",
@@ -127,7 +117,6 @@ function registerMcpHttpEndpoint(path: string) {
       }
       throw error;
     }
-    validateSession(request.headers["mcp-session-id"] as string | undefined);
 
     reply.raw.writeHead(200, {
       "Content-Type": "text/event-stream",
@@ -184,7 +173,6 @@ function registerMcpHttpEndpoint(path: string) {
       }
 
       const auth = getAuthContext(request.headers.authorization, reply);
-      validateSession(request.headers["mcp-session-id"] as string | undefined);
 
       if (rpc.method === "notifications/initialized") {
         return reply.status(202).send();
