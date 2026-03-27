@@ -1,9 +1,9 @@
 import Link from "next/link";
 
 const items = [
-  { href: "/", label: "Overview" },
-  { href: "/dashboard/connectors", label: "Control Centre" },
-  { href: "/dashboard/audit", label: "Audit" }
+  { href: "/" as const, label: "Overview" },
+  { href: "/dashboard/connectors" as const, label: "Control Centre" },
+  { href: "/dashboard/audit" as const, label: "Audit" }
 ];
 
 export function Nav() {
@@ -34,4 +34,3 @@ export function Nav() {
     </header>
   );
 }
-
