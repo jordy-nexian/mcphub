@@ -3,6 +3,7 @@ import Fastify from "fastify";
 import { buildAppConfig } from "./common/config/env";
 import { ensureDatabaseSchema } from "./common/db/postgres";
 import { AuditService } from "./modules/audit/audit.service";
+import { AuthService } from "./modules/auth/auth.service";
 import { ConnectorService } from "./modules/connectors/connector.service";
 import { registerApiRoutes } from "./modules/mcp/routes";
 
@@ -10,9 +11,10 @@ const config = buildAppConfig();
 const app = Fastify({ logger: true });
 
 const auditService = new AuditService();
+const authService = new AuthService();
 const connectorService = new ConnectorService(auditService);
 
-registerApiRoutes(app, { connectorService, auditService, config });
+registerApiRoutes(app, { authService, connectorService, auditService, config });
 
 await ensureDatabaseSchema();
 

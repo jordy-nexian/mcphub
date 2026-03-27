@@ -27,8 +27,8 @@ export function Nav() {
         <a className="button secondary" href="https://www.nexian.co.uk" target="_blank" rel="noreferrer">
           nexian.co.uk
         </a>
-        <Link className="button primary" href="/dashboard/connectors">
-          Open workspace
+        <Link className="button primary" href="/auth/login">
+          Sign in
         </Link>
       </div>
     </header>

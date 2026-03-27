@@ -1,6 +1,9 @@
 "use client";
 
+import { useRouter } from "next/navigation";
 import { startTransition, useEffect, useMemo, useState } from "react";
+
+import { clearPlatformSession, readPlatformSession, type PlatformSession } from "../lib/platform-auth";
 
 type Connector = {
   id: string;
@@ -130,7 +133,9 @@ function mapProviderStatus(status: string | undefined): Connector["status"] {
 }
 
 export function WorkspaceConsole() {
+  const router = useRouter();
   const [state, setState] = useState<DemoState>(initialState);
+  const [session, setSession] = useState<PlatformSession | null>(null);
   const [apiKey, setApiKey] = useState("");
   const [selectedConnector, setSelectedConnector] = useState("halopsa");
   const [token, setToken] = useState("");
@@ -155,6 +160,23 @@ export function WorkspaceConsole() {
     }
     setIsHydrated(true);
   }, []);
+
+  useEffect(() => {
+    const storedSession = readPlatformSession();
+    if (!storedSession) {
+      router.replace("/auth/login");
+      return;
+    }
+
+    setSession(storedSession);
+    setState((current) => ({
+      ...current,
+      workspaceName: storedSession.tenant.name,
+      workspaceSlug: storedSession.tenant.slug,
+      tenantId: storedSession.tenant.id,
+      userId: storedSession.user.id
+    }));
+  }, [router]);
 
   useEffect(() => {
     if (!isHydrated) {
@@ -197,12 +219,16 @@ export function WorkspaceConsole() {
     }
 
     async function loadProviders() {
+      if (!session) {
+        return;
+      }
+
       try {
-        const query = new URLSearchParams({
-          tenantId: state.tenantId,
-          userId: state.userId
+        const response = await fetch(`${apiOrigin}/providers`, {
+          headers: {
+            authorization: `Bearer ${session.token}`
+          }
         });
-        const response = await fetch(`${apiOrigin}/providers?${query.toString()}`);
         if (!response.ok) {
           throw new Error(`Failed to load providers (${response.status})`);
         }
@@ -230,7 +256,7 @@ export function WorkspaceConsole() {
     }
 
     void loadProviders();
-  }, [apiOrigin, isHydrated, state.tenantId, state.userId]);
+  }, [apiOrigin, isHydrated, session]);
 
   const connectedCount = state.connectors.filter((connector) => connector.status === "Connected").length;
 
@@ -244,19 +270,36 @@ export function WorkspaceConsole() {
     }));
   }
 
-  function connectConnector(id: string) {
+  async function connectConnector(id: string) {
     const connector = state.connectors.find((item) => item.id === id);
     if (!connector) {
       return;
     }
 
     if (connector.id === "halopsa") {
-      const query = new URLSearchParams({
-        tenantId: state.tenantId,
-        userId: state.userId,
-        returnTo: `${origin}/dashboard/connectors`
+      if (!session) {
+        router.replace("/auth/login");
+        return;
+      }
+
+      const response = await fetch(`${apiOrigin}/oauth/halopsa/url`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${session.token}`
+        },
+        body: JSON.stringify({
+          returnTo: `${origin}/dashboard/connectors`
+        })
       });
-      window.location.href = `${apiOrigin}/oauth/halopsa/start?${query.toString()}`;
+
+      if (!response.ok) {
+        setNotice(`Failed to start ${connector.name} OAuth.`);
+        return;
+      }
+
+      const payload = (await response.json()) as { authorizationUrl: string };
+      window.location.href = payload.authorizationUrl;
       return;
     }
 
@@ -283,13 +326,16 @@ export function WorkspaceConsole() {
       return;
     }
 
-    const query = new URLSearchParams({
-      tenantId: state.tenantId,
-      userId: state.userId
-    });
+    if (!session) {
+      router.replace("/auth/login");
+      return;
+    }
 
-    const response = await fetch(`${apiOrigin}/connected-accounts/${id}?${query.toString()}`, {
-      method: "DELETE"
+    const response = await fetch(`${apiOrigin}/connected-accounts/${id}`, {
+      method: "DELETE",
+      headers: {
+        authorization: `Bearer ${session.token}`
+      }
     });
 
     if (!response.ok) {
@@ -308,18 +354,19 @@ export function WorkspaceConsole() {
   }
 
   async function generateToken() {
+    if (!session) {
+      router.replace("/auth/login");
+      return;
+    }
+
     setLoadingToken(true);
     try {
       const response = await fetch(`${apiOrigin}/auth/mcp-token`, {
         method: "POST",
         headers: {
-          "content-type": "application/json"
-        },
-        body: JSON.stringify({
-          tenantId: state.tenantId,
-          userId: state.userId,
-          roles: ["ADMIN"]
-        })
+          "content-type": "application/json",
+          authorization: `Bearer ${session.token}`
+        }
       });
 
       if (!response.ok) {
@@ -343,6 +390,11 @@ export function WorkspaceConsole() {
     await navigator.clipboard.writeText(value);
     setCopied(label);
     window.setTimeout(() => setCopied(""), 1500);
+  }
+
+  function signOut() {
+    clearPlatformSession();
+    router.replace("/auth/login");
   }
 
   const selected = state.connectors.find((connector) => connector.id === selectedConnector) ?? state.connectors[0];
@@ -379,21 +431,21 @@ export function WorkspaceConsole() {
             <strong className="workspace-name">{state.workspaceName}</strong>
             <label className="stack">
               <span className="field-label">Tenant slug</span>
-              <input
-                value={state.workspaceSlug}
-                onChange={(event) =>
-                  setState((current) => ({ ...current, workspaceSlug: event.target.value.toLowerCase().replace(/\s+/g, "-") }))
-                }
-              />
+              <input value={state.workspaceSlug} readOnly />
             </label>
             <label className="stack">
               <span className="field-label">Tenant ID</span>
-              <input value={state.tenantId} onChange={(event) => setState((current) => ({ ...current, tenantId: event.target.value }))} />
+              <input value={state.tenantId} readOnly />
             </label>
             <label className="stack">
               <span className="field-label">User ID</span>
-              <input value={state.userId} onChange={(event) => setState((current) => ({ ...current, userId: event.target.value }))} />
+              <input value={state.userId} readOnly />
             </label>
+            <div className="row">
+              <button className="button secondary" onClick={signOut} type="button">
+                Sign out
+              </button>
+            </div>
           </div>
         </aside>
       </section>
