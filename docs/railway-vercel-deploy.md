@@ -46,7 +46,7 @@ Set these on the API service:
 - `API_URL=https://<your-api-service>.up.railway.app`
 - `MCP_URL=https://<your-mcp-service>.up.railway.app`
 - `REDIS_URL=<your-redis-url>`
-- `DATA_DIR=/app/data`
+- `DATABASE_URL=<your-neon-url>`
 - `INTERNAL_MCP_SHARED_SECRET=<shared-secret-for-mcp-to-api-calls>`
 - `SESSION_SECRET=<strong-random-secret>`
 - `OAUTH_STATE_SIGNING_SECRET=<strong-random-secret>`
@@ -59,7 +59,6 @@ Set these on the API service:
 
 Optional:
 
-- `DATABASE_URL=<your-neon-url>`
 - `MS365_CLIENT_ID=<your-m365-client-id>`
 - `MS365_CLIENT_SECRET=<your-m365-client-secret>`
 - `MS365_REDIRECT_URI=https://<your-api-service>.up.railway.app/oauth/microsoft365/callback`
@@ -115,7 +114,6 @@ Compatibility aliases are also available at:
 
 ## 8. Current limitation
 
-The API currently stores connected accounts in a local JSON file under `DATA_DIR`.
-That is acceptable for smoke testing and initial OAuth verification, but it is not durable for production.
+Connected accounts are now stored in Postgres, which fixes the previous redeploy/reset problem.
 
-The next production step is to move connected-account storage into Postgres via Prisma.
+The next production step is to add full Prisma-managed migrations for every model beyond connected accounts, rather than relying on startup schema bootstrapping for this one table.

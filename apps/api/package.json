@@ -17,15 +17,15 @@
   "dependencies": {
     "@nexian/connectors": "workspace:*",
     "@nexian/core": "workspace:*",
-    "@prisma/client": "^5.20.0",
     "fastify": "^5.0.0",
     "ioredis": "^5.4.1",
     "jsonwebtoken": "^9.0.2",
-    "prisma": "^5.20.0",
+    "pg": "^8.13.1",
     "zod": "^3.23.8"
   },
   "devDependencies": {
     "@types/jsonwebtoken": "^9.0.7",
+    "@types/pg": "^8.11.10",
     "tsx": "^4.19.1"
   }
 }

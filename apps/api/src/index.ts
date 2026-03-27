@@ -1,6 +1,7 @@
 import Fastify from "fastify";
 
 import { buildAppConfig } from "./common/config/env";
+import { ensureDatabaseSchema } from "./common/db/postgres";
 import { AuditService } from "./modules/audit/audit.service";
 import { ConnectorService } from "./modules/connectors/connector.service";
 import { registerApiRoutes } from "./modules/mcp/routes";
@@ -12,6 +13,8 @@ const auditService = new AuditService();
 const connectorService = new ConnectorService(auditService);
 
 registerApiRoutes(app, { connectorService, auditService, config });
+
+await ensureDatabaseSchema();
 
 app.listen({ host: "0.0.0.0", port: config.port }).catch((error) => {
   app.log.error(error);

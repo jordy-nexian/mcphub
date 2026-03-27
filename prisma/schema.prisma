@@ -1,0 +1,38 @@
+generator client {
+  provider = "prisma-client-js"
+  output   = "../apps/api/src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum ConnectedAccountStatus {
+  ACTIVE
+  EXPIRED
+  REVOKED
+  ERROR
+  DISCONNECTED
+}
+
+model ConnectedAccount {
+  id                    String                 @id
+  tenantId              String
+  userId                String
+  provider              String
+  providerAccountId     String?
+  accessTokenEncrypted  String                 @db.Text
+  refreshTokenEncrypted String?                @db.Text
+  expiresAt             DateTime?
+  scopes                String[]
+  metadataJson          Json?
+  status                ConnectedAccountStatus
+  lastError             String?                @db.Text
+  createdAt             DateTime               @default(now())
+  updatedAt             DateTime               @updatedAt
+
+  @@unique([tenantId, userId, provider])
+  @@index([tenantId, userId])
+  @@map("connected_accounts")
+}
