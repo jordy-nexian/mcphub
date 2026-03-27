@@ -81,7 +81,7 @@ Important production env relationships:
 - `MCP_URL` should be your Railway MCP URL
 - `HALOPSA_REDIRECT_URI` should point to the Railway API callback URL
 - `NEXT_PUBLIC_API_URL` in Vercel should point to the Railway API URL
-- `NEXT_PUBLIC_MCP_URL` in Vercel should point to the Railway MCP invoke URL
+- `NEXT_PUBLIC_MCP_URL` in Vercel should point to the Railway MCP endpoint URL
 - `SESSION_SECRET` must match between the API and MCP services
 
 ## Product architecture

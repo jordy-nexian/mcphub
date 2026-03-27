@@ -15,7 +15,7 @@ Use the `apps/web` folder as the Vercel project root.
 Set these Vercel environment variables:
 
 - `NEXT_PUBLIC_API_URL=https://<your-api-service>.up.railway.app`
-- `NEXT_PUBLIC_MCP_URL=https://<your-mcp-service>.up.railway.app/invoke`
+- `NEXT_PUBLIC_MCP_URL=https://<your-mcp-service>.up.railway.app`
 - `APP_URL=https://<your-vercel-app>.vercel.app`
 - `API_URL=https://<your-api-service>.up.railway.app`
 
@@ -98,12 +98,14 @@ The web UI sends the user to the API start route, and the API handles the callba
 
 ## 7. MCP URL to give to clients
 
-Use:
+Use the MCP endpoint:
 
-- MCP tools endpoint: `https://<your-mcp-service>.up.railway.app/tools`
-- MCP invoke endpoint: `https://<your-mcp-service>.up.railway.app/invoke`
+- `https://<your-mcp-service>.up.railway.app`
 
-For the current scaffold, the frontend displays the invoke endpoint.
+Compatibility aliases are also available at:
+
+- `https://<your-mcp-service>.up.railway.app/mcp`
+- `https://<your-mcp-service>.up.railway.app/invoke`
 
 ## 8. Current limitation
 

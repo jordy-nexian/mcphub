@@ -144,7 +144,7 @@ export function WorkspaceConsole() {
     () => process.env.NEXT_PUBLIC_API_URL ?? origin.replace(":3000", ":4000"),
     [origin]
   );
-  const mcpUrl = process.env.NEXT_PUBLIC_MCP_URL ?? `${origin.replace(":3000", ":4100")}/invoke`;
+  const mcpUrl = process.env.NEXT_PUBLIC_MCP_URL ?? origin.replace(":3000", ":4100");
 
   useEffect(() => {
     const saved = window.localStorage.getItem(storageKey);
