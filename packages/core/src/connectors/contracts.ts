@@ -11,7 +11,7 @@ export const oauthProviderConfigSchema = z.object({
 
 export type OAuthProviderConfig = z.infer<typeof oauthProviderConfigSchema>;
 
-export interface ConnectorToolDefinition<TInput = unknown, TOutput = unknown> {
+export interface ConnectorToolDefinition<TInput = any, TOutput = any> {
   name: string;
   description: string;
   inputSchema: z.ZodType<TInput>;
@@ -27,6 +27,5 @@ export interface ProviderAdapter {
   exchangeCode?(code: string): Promise<TokenPair>;
   refreshToken?(account: ConnectedAccountRecord, refreshToken: string): Promise<TokenPair>;
   revoke?(account: ConnectedAccountRecord): Promise<void>;
-  getTools(): ConnectorToolDefinition[];
+  getTools(): ConnectorToolDefinition<any, any>[];
 }
-
