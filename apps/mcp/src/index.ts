@@ -19,7 +19,7 @@ import {
 
 const app = Fastify({ logger: true });
 const jwtSecret = process.env.SESSION_SECRET ?? "local-session-secret";
-const authMode = process.env.MCP_AUTH_MODE ?? "optional";
+const authMode = process.env.MCP_AUTH_MODE ?? "required";
 const providers = getProviderRegistry();
 const toolCatalog = buildToolCatalog();
 const sessionAuth = new Map<string, AuthContext>();

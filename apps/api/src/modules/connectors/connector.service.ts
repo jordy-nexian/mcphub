@@ -74,6 +74,18 @@ function buildHaloHeaders(accessToken: string) {
   };
 }
 
+function ticketMatchesIdentifier(ticket: HaloTicketRecord, identifier: string) {
+  const normalized = identifier.replace(/^0+/, "");
+  const candidates = [
+    pickString(ticket, ["id", "ticket_id", "TicketID", "ticketnumber", "ticket_number", "number"]),
+    String(pickNumber(ticket, ["id", "ticket_id", "TicketID", "ticketnumber", "ticket_number", "number"]) ?? "")
+  ]
+    .map((value) => value?.trim())
+    .filter(Boolean) as string[];
+
+  return candidates.some((candidate) => candidate === identifier || candidate.replace(/^0+/, "") === normalized);
+}
+
 export class ConnectorService {
   private readonly registry = getProviderRegistry();
   private readonly encryption = TokenEncryptionService.fromBase64(config.tokenEncryptionKeyBase64);
@@ -312,16 +324,38 @@ export class ConnectorService {
       throw new Error("get_ticket requires an id");
     }
 
-    const response = await fetch(`${getHaloBaseUrl()}/api/tickets/${id}`, {
+    let ticket: HaloTicketRecord | undefined;
+
+    const directResponse = await fetch(`${getHaloBaseUrl()}/api/tickets/${id}`, {
       headers: buildHaloHeaders(accessToken)
     });
 
-    if (!response.ok) {
-      const body = await response.text();
-      throw new Error(`HaloPSA ticket request failed (${response.status}): ${body}`);
+    if (directResponse.ok) {
+      ticket = (await directResponse.json()) as HaloTicketRecord;
+    } else {
+      const searchUrl = new URL(`${getHaloBaseUrl()}/api/tickets`);
+      searchUrl.searchParams.set("search", id);
+      searchUrl.searchParams.set("count", "25");
+
+      const searchResponse = await fetch(searchUrl, {
+        headers: buildHaloHeaders(accessToken)
+      });
+
+      if (!searchResponse.ok) {
+        const body = await searchResponse.text();
+        throw new Error(`HaloPSA ticket request failed (${searchResponse.status}): ${body}`);
+      }
+
+      const payload = (await searchResponse.json()) as HaloTicketRecord[] | { tickets?: HaloTicketRecord[] };
+      const tickets = Array.isArray(payload) ? payload : (payload.tickets ?? []);
+      ticket = tickets.find((candidate) => ticketMatchesIdentifier(candidate, id));
+
+      if (!ticket) {
+        const directBody = await directResponse.text();
+        throw new Error(`HaloPSA ticket request failed (${directResponse.status}): ${directBody}`);
+      }
     }
 
-    const ticket = (await response.json()) as HaloTicketRecord;
     return {
       summary: `Loaded HaloPSA ticket ${id}.`,
       data: [
