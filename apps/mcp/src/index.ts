@@ -89,11 +89,16 @@ async function executeTool(auth: AuthContext, name: string, input: Record<string
 }
 
 function buildToolCallResult(output: NormalizedToolResponse) {
+  const preview =
+    output.data.length > 0
+      ? `\n\n${JSON.stringify(output.data.slice(0, 3), null, 2)}`
+      : "";
+
   return {
     content: [
       {
         type: "text",
-        text: output.summary
+        text: `${output.summary}${preview}`
       }
     ],
     structuredContent: output,
