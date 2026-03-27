@@ -3,7 +3,7 @@ import crypto from "node:crypto";
 import Fastify from "fastify";
 
 import { getProviderRegistry } from "@nexian/connectors";
-import type { AuthContext, ToolExecutionContext } from "@nexian/core/domain/models";
+import type { AuthContext } from "@nexian/core/domain/models";
 import type { NormalizedToolResponse } from "@nexian/core/mcp/tools";
 
 import { parseBearerToken } from "./auth/bearer";
@@ -74,26 +74,28 @@ function validateSession(sessionId: string | undefined) {
 }
 
 async function executeTool(auth: AuthContext, name: string, input: Record<string, unknown>) {
-  const provider = [...providers.values()].find((candidate) =>
-    candidate.getTools().some((tool) => tool.name === name)
-  );
+  const response = await fetch(`${process.env.API_URL ?? "http://localhost:4000"}/internal/mcp/tools/call`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-internal-mcp-secret": process.env.INTERNAL_MCP_SHARED_SECRET ?? jwtSecret
+    },
+    body: JSON.stringify({
+      tenantId: auth.tenantId,
+      userId: auth.userId,
+      roles: auth.roles,
+      name,
+      arguments: input
+    })
+  });
 
-  if (!provider) {
-    throw new Error(`Unknown tool ${name}`);
+  if (!response.ok) {
+    const body = await response.text();
+    throw new Error(`API tool execution failed (${response.status}): ${body}`);
   }
 
-  const tool = provider.getTools().find((candidate) => candidate.name === name);
-  if (!tool) {
-    throw new Error(`Tool ${name} not found`);
-  }
-
-  const context: ToolExecutionContext = {
-    ...auth,
-    requestId: crypto.randomUUID(),
-    accountId: "connected-account-placeholder"
-  };
-
-  return tool.execute(context, input) as Promise<NormalizedToolResponse>;
+  const payload = (await response.json()) as { result: NormalizedToolResponse };
+  return payload.result;
 }
 
 function buildToolCallResult(output: NormalizedToolResponse) {

@@ -47,6 +47,7 @@ Set these on the API service:
 - `MCP_URL=https://<your-mcp-service>.up.railway.app`
 - `REDIS_URL=<your-redis-url>`
 - `DATA_DIR=/app/data`
+- `INTERNAL_MCP_SHARED_SECRET=<shared-secret-for-mcp-to-api-calls>`
 - `SESSION_SECRET=<strong-random-secret>`
 - `OAUTH_STATE_SIGNING_SECRET=<strong-random-secret>`
 - `TOKEN_ENCRYPTION_KEY_BASE64=<32-byte-base64-key>`
@@ -78,6 +79,7 @@ Set these on the MCP service:
 - `MCP_DEFAULT_TENANT_ID=demo-tenant`
 - `MCP_DEFAULT_USER_ID=demo-user`
 - `MCP_DEFAULT_ROLES=ADMIN`
+- `INTERNAL_MCP_SHARED_SECRET=<the same value used by the API service>`
 - `SESSION_SECRET=<the same value used by the API service>`
 
 If you later switch to `MCP_AUTH_MODE=required`, the API and MCP services must share the same `SESSION_SECRET`, because the API issues the bearer token and the MCP service validates it.

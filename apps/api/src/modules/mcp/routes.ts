@@ -36,7 +36,7 @@ export function registerApiRoutes(
   deps: {
     connectorService: ConnectorService;
     auditService: AuditService;
-    config: { apiUrl: string; appUrl: string };
+    config: { apiUrl: string; appUrl: string; internalMcpSharedSecret: string };
   }
 ) {
   app.addHook("onRequest", async (_request, reply) => {
@@ -99,5 +99,31 @@ export function registerApiRoutes(
 
     return { token: deps.connectorService.issueMcpToken(body.tenantId, body.userId, body.roles) };
   });
-}
 
+  app.post("/internal/mcp/tools/call", async (request, reply) => {
+    const secret = request.headers["x-internal-mcp-secret"];
+    if (secret !== deps.config.internalMcpSharedSecret) {
+      return reply.status(401).send({ error: "unauthorized" });
+    }
+
+    const body = z
+      .object({
+        tenantId: z.string().min(1),
+        userId: z.string().min(1),
+        roles: z.array(z.string()).default(["ADMIN"]),
+        name: z.string().min(1),
+        arguments: z.record(z.unknown()).default({})
+      })
+      .parse(request.body);
+
+    const result = await deps.connectorService.executeTool(
+      body.tenantId,
+      body.userId,
+      body.roles,
+      body.name,
+      body.arguments
+    );
+
+    return { result };
+  });
+}
