@@ -306,7 +306,8 @@ export class ConnectorService {
   }
 
   private async getHaloTicket(accessToken: string, input: Record<string, unknown>) {
-    const id = typeof input.id === "number" || typeof input.id === "string" ? String(input.id) : undefined;
+    const rawId = input.id ?? input.ticketId ?? input.ticket_id ?? input.query;
+    const id = typeof rawId === "number" || typeof rawId === "string" ? String(rawId).trim() : undefined;
     if (!id) {
       throw new Error("get_ticket requires an id");
     }
