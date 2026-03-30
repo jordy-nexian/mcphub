@@ -4,6 +4,7 @@ import type { Route } from "next";
 import { useRouter } from "next/navigation";
 import { useMemo, useState } from "react";
 
+import { NexianLogo } from "../../../components/nexian-logo";
 import { writePlatformSession } from "../../../lib/platform-auth";
 
 type Mode = "login" | "register";
@@ -59,6 +60,9 @@ export default function LoginPage() {
     <main className="auth-shell">
       <section className="auth-card">
         <div className="stack">
+          <span className="auth-logo-wrap">
+            <NexianLogo className="auth-logo-image" priority="high" />
+          </span>
           <span className="eyebrow">Nexian Command</span>
           <h1>{mode === "login" ? "Sign in to the MSP platform" : "Create a customer workspace"}</h1>
           <p className="muted">

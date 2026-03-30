@@ -4,6 +4,7 @@ import Link from "next/link";
 import type { Route } from "next";
 import { usePathname } from "next/navigation";
 
+import { NexianLogo } from "./nexian-logo";
 import { clearPlatformSession, readPlatformSession } from "../lib/platform-auth";
 
 const adminNav = [
@@ -42,7 +43,9 @@ export function Sidebar({ variant }: { variant: "admin" | "tenant" }) {
     <aside className="sidebar">
       <div className="sidebar-top">
         <Link href={(variant === "admin" ? "/admin/dashboard" : "/dashboard") as Route} className="sidebar-brand">
-          <span className="sidebar-logo">N</span>
+          <span className="sidebar-logo">
+            <NexianLogo className="sidebar-logo-image" priority="high" />
+          </span>
           <span className="sidebar-brand-copy">
             <strong>Nexian Command</strong>
             <span>{variant === "admin" ? "MSP Operations Console" : "Customer Workspace"}</span>

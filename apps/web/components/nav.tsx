@@ -1,6 +1,8 @@
 import Link from "next/link";
 import type { Route } from "next";
 
+import { NexianLogo } from "./nexian-logo";
+
 const items = [
   { href: "/" as const, label: "Overview" },
   { href: "/auth/login" as const, label: "Platform Access" },
@@ -11,7 +13,9 @@ export function Nav() {
   return (
     <header className="topbar">
       <Link href="/" className="brand">
-        <span className="brand-mark">N</span>
+        <span className="brand-mark">
+          <NexianLogo className="brand-logo-image" priority="high" />
+        </span>
         <span className="brand-copy">
           <strong>Nexian Command</strong>
           <span>Managed AI Integration Platform</span>
