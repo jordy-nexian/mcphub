@@ -2,8 +2,10 @@ import { z } from "zod";
 
 export const toolNames = [
   "find_customer",
+  "get_customer_overview",
   "list_open_tickets",
   "get_ticket",
+  "get_ticket_with_actions",
   "list_ticket_actions",
   "search_projects",
   "find_contact",
@@ -24,4 +26,3 @@ export const normalizedToolResponseSchema = z.object({
 });
 
 export type NormalizedToolResponse = z.infer<typeof normalizedToolResponseSchema>;
-

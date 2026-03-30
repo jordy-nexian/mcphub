@@ -331,8 +331,12 @@ export class ConnectorService {
     switch (toolName) {
       case "list_open_tickets":
         return this.listOpenHaloTickets(accessToken, input);
+      case "get_customer_overview":
+        return this.getHaloCustomerOverview(accessToken, input);
       case "get_ticket":
         return this.getHaloTicket(accessToken, input);
+      case "get_ticket_with_actions":
+        return this.getHaloTicketWithActions(accessToken, input);
       case "find_customer":
         return this.findHaloCustomer(accessToken, input);
       case "list_ticket_actions":
@@ -453,6 +457,58 @@ export class ConnectorService {
     };
   }
 
+  private async getHaloCustomerOverview(accessToken: string, input: Record<string, unknown>) {
+    const query = typeof input.query === "string" ? input.query.trim() : "";
+    if (!query) {
+      throw new Error("get_customer_overview requires a customer query");
+    }
+
+    const customers = await this.lookupHaloCustomers(accessToken, query, 10);
+    const matchedCustomer =
+      customers.find((customer) =>
+        [
+          pickString(customer, ["name", "client_name"]),
+          pickString(customer, ["reference", "client_reference", "ref"]),
+          pickString(customer, ["organisation_name", "customer_name"])
+        ].some((candidate) => textMatches(candidate, query))
+      ) ?? customers[0];
+
+    if (!matchedCustomer) {
+      return {
+        summary: `No HaloPSA customer matched ${query}.`,
+        data: [],
+        source: "halopsa"
+      };
+    }
+
+    const customerId = pickNumber(matchedCustomer, ["id", "client_id"]);
+    const customerName =
+      pickString(matchedCustomer, ["name", "client_name", "organisation_name", "customer_name"]) ?? query;
+    const tickets = await this.listOpenHaloTickets(accessToken, {
+      client_id: customerId,
+      query: customerName
+    });
+
+    return {
+      summary: `Loaded HaloPSA customer overview for ${customerName}. Result includes core customer fields and recent open ticket activity.`,
+      data: [
+        {
+          customer: {
+            id: customerId,
+            name: customerName,
+            reference: pickString(matchedCustomer, ["reference", "client_reference", "ref"]),
+            email: pickString(matchedCustomer, ["email", "main_email"]),
+            phone: pickString(matchedCustomer, ["phone", "main_phone"]),
+            raw: matchedCustomer
+          },
+          openTicketCount: tickets.data.length,
+          recentTickets: tickets.data
+        }
+      ],
+      source: "halopsa"
+    };
+  }
+
   private async lookupHaloCustomers(accessToken: string, query: string, count = 25) {
     const url = new URL(`${getHaloBaseUrl()}/api/client`);
     url.searchParams.set("search", query);
@@ -508,6 +564,30 @@ export class ConnectorService {
         createdAt: pickString(action, ["datecreated", "created_at", "datetime"]),
         raw: action
       })),
+      source: "halopsa"
+    };
+  }
+
+  private async getHaloTicketWithActions(accessToken: string, input: Record<string, unknown>) {
+    const ticket = await this.getHaloTicket(accessToken, input);
+    const ticketRecord = ticket.data[0] as Record<string, unknown> | undefined;
+    const resolvedTicketId =
+      pickNumber(ticketRecord ?? {}, ["id"]) ??
+      pickNumber(input, ["id", "ticketId", "ticket_id"]) ??
+      (typeof input.query === "string" && !Number.isNaN(Number(input.query.trim())) ? Number(input.query.trim()) : undefined);
+
+    const actions = resolvedTicketId
+      ? await this.listHaloTicketActions(accessToken, { ticket_id: resolvedTicketId })
+      : { summary: "No ticket actions loaded.", data: [], source: "halopsa" };
+
+    return {
+      summary: `Loaded HaloPSA ticket with recent actions. Result includes the main ticket fields and recent internal updates or actions.`,
+      data: [
+        {
+          ticket: ticket.data[0] ?? null,
+          recentActions: actions.data
+        }
+      ],
       source: "halopsa"
     };
   }

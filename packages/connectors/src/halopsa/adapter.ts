@@ -95,12 +95,20 @@ export const haloPsaAdapter: ProviderAdapter = {
         "Use when the user wants to identify an organisation, customer account, or client record in HaloPSA by name, reference, or partial account text."
       ),
       createStubTool(
+        "get_customer_overview",
+        "Use when the user wants a combined HaloPSA view of a customer with their core account details plus recent open ticket activity."
+      ),
+      createStubTool(
         "list_open_tickets",
         "Use when the user wants a queue-style view of active tickets, open incidents, or tickets for a customer. Prefer this before get_ticket if the exact ticket id is unknown."
       ),
       createStubTool(
         "get_ticket",
         "Use when the user gives a specific HaloPSA ticket number, id, or visible ticket reference and wants the full details for one ticket."
+      ),
+      createStubTool(
+        "get_ticket_with_actions",
+        "Use when the user wants a single HaloPSA ticket together with its recent actions, notes, or engineer updates in one result."
       ),
       createStubTool(
         "list_ticket_actions",
