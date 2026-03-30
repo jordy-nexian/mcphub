@@ -92,11 +92,15 @@ export const haloPsaAdapter: ProviderAdapter = {
     return [
       createStubTool("find_customer", "Find a customer by name or account reference."),
       createStubTool("list_open_tickets", "List open HaloPSA tickets for a customer or queue."),
-      createStubTool("get_ticket", "Get a HaloPSA ticket by identifier."),
-      createStubTool("list_ticket_actions", "List actions recorded against a HaloPSA ticket."),
-      createStubTool("create_draft_ticket", "Create a draft service desk ticket with guardrails."),
-      createStubTool("add_internal_note", "Add a non-customer-visible internal note to a ticket.")
+      createStubTool("get_ticket", "Get a HaloPSA ticket by identifier, ticket number, or display reference."),
+      createStubTool("list_ticket_actions", "List actions and notes recorded against a HaloPSA ticket."),
+      createStubTool("search_projects", "Search HaloPSA projects and project tickets by name, code, or summary."),
+      createStubTool("find_contact", "Find HaloPSA contacts or end users by name, email, or phone."),
+      createStubTool("search_documents", "Search HaloPSA knowledge base articles and documentation."),
+      createStubTool("list_devices_for_site", "List HaloPSA assets and devices for a site or location."),
+      createStubTool("get_recent_invoices", "List recent HaloPSA invoices or billing records."),
+      createStubTool("create_draft_ticket", "Create a guarded draft HaloPSA ticket with minimal safe fields."),
+      createStubTool("add_internal_note", "Add a non-customer-visible internal note or action to a HaloPSA ticket.")
     ];
   }
 };
-
