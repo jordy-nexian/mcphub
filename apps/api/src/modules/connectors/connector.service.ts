@@ -763,9 +763,47 @@ export class ConnectorService {
   }
 
   private async addHaloInternalNote(accessToken: string, input: Record<string, unknown>) {
-    const rawId = input.id ?? input.ticketId ?? input.ticket_id;
-    const ticketId = typeof rawId === "number" || typeof rawId === "string" ? String(rawId).trim() : undefined;
-    const note = typeof input.note === "string" ? input.note.trim() : typeof input.query === "string" ? input.query.trim() : "";
+    const rawId =
+      input.id ??
+      input.ticketId ??
+      input.ticket_id ??
+      input.ticket ??
+      input.ticketNumber ??
+      input.ticket_number;
+    let ticketId = typeof rawId === "number" || typeof rawId === "string" ? String(rawId).trim() : undefined;
+    let note =
+      typeof input.note === "string"
+        ? input.note.trim()
+        : typeof input.message === "string"
+          ? input.message.trim()
+          : typeof input.text === "string"
+            ? input.text.trim()
+            : typeof input.content === "string"
+              ? input.content.trim()
+              : typeof input.comment === "string"
+                ? input.comment.trim()
+                : typeof input.body === "string"
+                  ? input.body.trim()
+                  : "";
+
+    if ((!ticketId || !note) && typeof input.query === "string") {
+      const query = input.query.trim();
+
+      if (!ticketId) {
+        const ticketMatch = query.match(/ticket\s+#?0*([0-9]+)/i);
+        if (ticketMatch) {
+          ticketId = ticketMatch[1];
+        }
+      }
+
+      if (!note) {
+        note = query
+          .replace(/add\s+(an?\s+)?internal\s+note\s+(to|for)\s+ticket\s+#?0*[0-9]+/i, "")
+          .replace(/ticket\s+#?0*[0-9]+/i, "")
+          .trim();
+      }
+    }
+
     if (!ticketId || !note) {
       throw new Error("add_internal_note requires a ticket id and note");
     }
