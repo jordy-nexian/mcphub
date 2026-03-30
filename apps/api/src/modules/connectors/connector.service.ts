@@ -112,6 +112,14 @@ function normalizeCollectionPayload(payload: unknown, keys: string[]) {
   return [];
 }
 
+function textMatches(value: string | undefined, query: string) {
+  if (!value) {
+    return false;
+  }
+
+  return value.toLowerCase().includes(query.toLowerCase());
+}
+
 export class ConnectorService {
   private readonly registry = getProviderRegistry();
   private readonly encryption = TokenEncryptionService.fromBase64(config.tokenEncryptionKeyBase64);
@@ -323,11 +331,17 @@ export class ConnectorService {
   }
 
   private async listOpenHaloTickets(accessToken: string, input: Record<string, unknown>) {
-    const query = typeof input.query === "string" ? input.query : undefined;
+    const query = typeof input.query === "string" ? input.query.trim() : undefined;
+    const explicitClientId =
+      pickNumber(input, ["clientId", "client_id"]) ??
+      pickNumber(input, ["customerId", "customer_id"]) ??
+      pickNumber(input, ["organisationId", "organisation_id"]);
     const url = new URL(`${getHaloBaseUrl()}/api/tickets`);
     url.searchParams.set("count", "50");
     url.searchParams.set("includeclosed", "false");
-    if (query) {
+    if (explicitClientId) {
+      url.searchParams.set("client_id", String(explicitClientId));
+    } else if (query) {
       url.searchParams.set("search", query);
     }
 
@@ -342,13 +356,48 @@ export class ConnectorService {
 
     const payload = (await response.json()) as HaloTicketRecord[] | { tickets?: HaloTicketRecord[] };
     const tickets = Array.isArray(payload) ? payload : (payload.tickets ?? []);
-    const openTickets = tickets.filter(isTicketOpen).slice(0, 25);
+
+    let clientId = explicitClientId;
+    let resolvedCustomerName: string | undefined;
+
+    if (!clientId && query) {
+      const customerLookup = await this.lookupHaloCustomers(accessToken, query, 10);
+      const matchedCustomer = customerLookup.find((customer) =>
+        [
+          pickString(customer, ["name", "client_name"]),
+          pickString(customer, ["reference", "client_reference", "ref"]),
+          pickString(customer, ["organisation_name", "customer_name"])
+        ].some((candidate) => textMatches(candidate, query))
+      );
+
+      clientId = matchedCustomer ? pickNumber(matchedCustomer, ["id", "client_id"]) : undefined;
+      resolvedCustomerName = matchedCustomer
+        ? pickString(matchedCustomer, ["name", "client_name", "organisation_name", "customer_name"])
+        : undefined;
+    }
+
+    const openTickets = tickets
+      .filter(isTicketOpen)
+      .filter((ticket) => {
+        if (!clientId) {
+          return true;
+        }
+
+        const ticketClientId = pickNumber(ticket, ["client_id", "clientid", "organisation_id", "customer_id"]);
+        if (ticketClientId && ticketClientId === clientId) {
+          return true;
+        }
+
+        const ticketCustomerName = pickString(ticket, ["client_name", "customer_name", "organisation_name"]);
+        return Boolean(resolvedCustomerName && ticketCustomerName === resolvedCustomerName);
+      })
+      .slice(0, 25);
 
     return {
       summary:
         openTickets.length > 0
-          ? `Found ${openTickets.length} open HaloPSA tickets. Results include ticket id, summary, status, customer, priority, and last action time.`
-          : "No open HaloPSA tickets found.",
+          ? `Found ${openTickets.length} open HaloPSA tickets${resolvedCustomerName ? ` for ${resolvedCustomerName}` : ""}. Results include ticket id, summary, status, customer, priority, and last action time.`
+          : `No open HaloPSA tickets found${resolvedCustomerName ? ` for ${resolvedCustomerName}` : ""}.`,
       data: openTickets.map((ticket) => ({
         id: pickNumber(ticket, ["id", "ticket_id", "TicketID"]),
         summary: pickString(ticket, ["summary", "subject", "title"]) ?? "Untitled ticket",
@@ -360,6 +409,24 @@ export class ConnectorService {
       })),
       source: "halopsa"
     };
+  }
+
+  private async lookupHaloCustomers(accessToken: string, query: string, count = 25) {
+    const url = new URL(`${getHaloBaseUrl()}/api/client`);
+    url.searchParams.set("search", query);
+    url.searchParams.set("count", String(count));
+
+    const response = await fetch(url, {
+      headers: buildHaloHeaders(accessToken)
+    });
+
+    if (!response.ok) {
+      const body = await response.text();
+      throw new Error(`HaloPSA customer request failed (${response.status}): ${body}`);
+    }
+
+    const payload = (await response.json()) as HaloClientRecord[] | { clients?: HaloClientRecord[] };
+    return Array.isArray(payload) ? payload : (payload.clients ?? []);
   }
 
   private async listHaloTicketActions(accessToken: string, input: Record<string, unknown>) {
@@ -761,21 +828,7 @@ export class ConnectorService {
       throw new Error("find_customer requires a query");
     }
 
-    const url = new URL(`${getHaloBaseUrl()}/api/client`);
-    url.searchParams.set("search", query);
-    url.searchParams.set("count", "25");
-
-    const response = await fetch(url, {
-      headers: buildHaloHeaders(accessToken)
-    });
-
-    if (!response.ok) {
-      const body = await response.text();
-      throw new Error(`HaloPSA customer request failed (${response.status}): ${body}`);
-    }
-
-    const payload = (await response.json()) as HaloClientRecord[] | { clients?: HaloClientRecord[] };
-    const clients = Array.isArray(payload) ? payload : (payload.clients ?? []);
+    const clients = await this.lookupHaloCustomers(accessToken, query, 25);
 
     return {
       summary:
