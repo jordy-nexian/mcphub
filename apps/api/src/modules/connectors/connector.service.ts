@@ -817,21 +817,20 @@ export class ConnectorService {
       throw new Error("add_internal_note requires a ticket id and note");
     }
 
-    const response = await haloFetch(`${getHaloBaseUrl()}/api/actions`, {
-      method: "POST",
-      headers: buildHaloJsonHeaders(accessToken),
-      body: JSON.stringify({
-        ticket_id: ticketId,
-        note,
-        note_html: note,
-        hiddenfromuser: true
-      }),
-      bodyPreview: {
+    const actionPayload = [
+      {
         ticket_id: ticketId,
         note,
         note_html: note,
         hiddenfromuser: true
       }
+    ];
+
+    const response = await haloFetch(`${getHaloBaseUrl()}/api/actions`, {
+      method: "POST",
+      headers: buildHaloJsonHeaders(accessToken),
+      body: JSON.stringify(actionPayload),
+      bodyPreview: actionPayload
     });
 
     if (!response.ok) {
