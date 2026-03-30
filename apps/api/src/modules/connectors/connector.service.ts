@@ -368,26 +368,6 @@ export class ConnectorService {
       pickNumber(input, ["clientId", "client_id"]) ??
       pickNumber(input, ["customerId", "customer_id"]) ??
       pickNumber(input, ["organisationId", "organisation_id"]);
-    const url = new URL(`${getHaloBaseUrl()}/api/tickets`);
-    url.searchParams.set("count", "50");
-    url.searchParams.set("includeclosed", "false");
-    if (explicitClientId) {
-      url.searchParams.set("client_id", String(explicitClientId));
-    } else if (query) {
-      url.searchParams.set("search", query);
-    }
-
-    const response = await haloFetch(url, {
-      headers: buildHaloHeaders(accessToken)
-    });
-
-    if (!response.ok) {
-      const body = await response.text();
-      throw new Error(`HaloPSA tickets request failed (${response.status}): ${body}`);
-    }
-
-    const payload = (await response.json()) as HaloTicketRecord[] | { tickets?: HaloTicketRecord[] };
-    const tickets = Array.isArray(payload) ? payload : (payload.tickets ?? []);
 
     let clientId = explicitClientId;
     let resolvedCustomerName: string | undefined;
@@ -407,6 +387,27 @@ export class ConnectorService {
         ? pickString(matchedCustomer, ["name", "client_name", "organisation_name", "customer_name"])
         : undefined;
     }
+
+    const url = new URL(`${getHaloBaseUrl()}/api/tickets`);
+    url.searchParams.set("count", "50");
+    url.searchParams.set("includeclosed", "false");
+    if (clientId) {
+      url.searchParams.set("client_id", String(clientId));
+    } else if (query) {
+      url.searchParams.set("search", query);
+    }
+
+    const response = await haloFetch(url, {
+      headers: buildHaloHeaders(accessToken)
+    });
+
+    if (!response.ok) {
+      const body = await response.text();
+      throw new Error(`HaloPSA tickets request failed (${response.status}): ${body}`);
+    }
+
+    const payload = (await response.json()) as HaloTicketRecord[] | { tickets?: HaloTicketRecord[] };
+    const tickets = Array.isArray(payload) ? payload : (payload.tickets ?? []);
 
     const openTickets = tickets
       .filter(isTicketOpen)
