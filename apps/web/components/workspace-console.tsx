@@ -60,9 +60,21 @@ const initialState: DemoState = {
       category: "Service desk",
       auth: "OAuth 2.0",
       status: "Disconnected",
-      description: "Customer, ticket, action, and draft ticket tools.",
+      description: "Customers, tickets, ticket actions, projects, contacts, knowledge, devices, invoices, and guarded write tools.",
       lastSync: "Not connected",
-      tools: ["find_customer", "list_open_tickets", "get_ticket", "list_ticket_actions", "create_draft_ticket"],
+      tools: [
+        "find_customer",
+        "list_open_tickets",
+        "get_ticket",
+        "list_ticket_actions",
+        "search_projects",
+        "find_contact",
+        "search_documents",
+        "list_devices_for_site",
+        "get_recent_invoices",
+        "create_draft_ticket",
+        "add_internal_note"
+      ],
       realOAuth: true
     },
     {
@@ -97,8 +109,15 @@ const initialState: DemoState = {
     }
   ],
   permissions: [
+    { tool: "find_customer", roles: ["Owner", "Admin", "Analyst", "User"], enabled: true },
     { tool: "list_open_tickets", roles: ["Owner", "Admin", "Analyst", "User"], enabled: true },
+    { tool: "get_ticket", roles: ["Owner", "Admin", "Analyst", "User"], enabled: true },
+    { tool: "list_ticket_actions", roles: ["Owner", "Admin", "Analyst", "User"], enabled: true },
+    { tool: "search_projects", roles: ["Owner", "Admin", "Analyst", "User"], enabled: true },
+    { tool: "find_contact", roles: ["Owner", "Admin", "Analyst", "User"], enabled: true },
     { tool: "search_documents", roles: ["Owner", "Admin", "Analyst", "User"], enabled: true },
+    { tool: "list_devices_for_site", roles: ["Owner", "Admin", "Analyst", "User"], enabled: true },
+    { tool: "get_recent_invoices", roles: ["Owner", "Admin"], enabled: true },
     { tool: "create_draft_ticket", roles: ["Owner", "Admin"], enabled: true },
     { tool: "add_internal_note", roles: ["Owner", "Admin"], enabled: false }
   ],
@@ -406,8 +425,9 @@ export function WorkspaceConsole() {
           <span className="eyebrow">Nexian AI & Automation Control Centre</span>
           <h1 className="hero-title">Connect your MSP stack, control safe tools, and hand clients a single MCP endpoint.</h1>
           <p className="muted hero-text">
-            HaloPSA now uses the real authorization-code route. The other connectors remain scaffolded until we wire
-            their provider-specific token exchange and storage paths.
+            HaloPSA now uses the real authorization-code route and exposes the expanded Nexian MCP surface for tickets,
+            actions, projects, contacts, knowledge, assets, invoices, and guarded writes. The other connectors remain
+            scaffolded until we wire their provider-specific token exchange and storage paths.
           </p>
           <div className="stats-grid">
             <div className="stat-card">
@@ -475,12 +495,13 @@ export function WorkspaceConsole() {
                 <p className="connector-meta">Last activity: {connector.lastSync}</p>
                 {connector.lastError ? <p className="danger-text">{connector.lastError}</p> : null}
                 <div className="chip-row">
-                  {connector.tools.slice(0, 3).map((tool) => (
+                  {connector.tools.slice(0, connector.id === "halopsa" ? 6 : 3).map((tool) => (
                     <span key={tool} className="chip">
                       {tool}
                     </span>
                   ))}
                 </div>
+                {connector.id === "halopsa" ? <p className="connector-meta">{connector.tools.length} MCP tools available</p> : null}
                 <div className="row">
                   <button className="button primary" onClick={() => connectConnector(connector.id)} type="button">
                     {connector.id === "halopsa" ? "Connect with HaloPSA" : connector.auth === "API key" ? "Save API key" : "Coming next"}
@@ -514,6 +535,11 @@ export function WorkspaceConsole() {
           <div className="setup-card">
             <strong>{selected.name}</strong>
             <p className="muted">{selected.description}</p>
+            <p className="connector-meta">
+              {selected.id === "halopsa"
+                ? "Live MCP tools: customer lookup, ticketing, action history, project search, contacts, documents, site devices, invoices, and guarded writes."
+                : "Displayed tools are the current scaffold surface for this provider."}
+            </p>
             <div className="chip-row">
               {selected.tools.map((tool) => (
                 <span key={tool} className="chip">
@@ -530,7 +556,7 @@ export function WorkspaceConsole() {
           ) : (
             <div className="notice">
               {selected.id === "halopsa"
-                ? "HaloPSA is now wired to the API authorization-code route. Set HALOPSA_BASE_URL, HALOPSA_CLIENT_ID, HALOPSA_CLIENT_SECRET, and HALOPSA_REDIRECT_URI before connecting."
+                ? "HaloPSA is now wired to the API authorization-code route and the expanded MCP tool catalog. Set HALOPSA_BASE_URL, HALOPSA_CLIENT_ID, HALOPSA_CLIENT_SECRET, and HALOPSA_REDIRECT_URI before connecting."
                 : "This provider still uses scaffold logic. HaloPSA is the only live OAuth path in this build."}
             </div>
           )}
