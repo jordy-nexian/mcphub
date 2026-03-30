@@ -820,6 +820,7 @@ export class ConnectorService {
     const actionPayload = [
       {
         ticket_id: ticketId,
+        outcome: "Private Note",
         note,
         note_html: note,
         hiddenfromuser: true
