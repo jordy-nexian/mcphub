@@ -78,6 +78,29 @@ type AuthorizationCodeRow = {
   consumed_at: Date | null;
 };
 
+type OAuthClientRow = {
+  client_id: string;
+  client_secret_hash: string;
+  redirect_uris: string[];
+  grant_types: string[];
+  response_types: string[];
+  scope: string[];
+  token_endpoint_auth_method: string;
+  client_name: string | null;
+  created_at: Date;
+};
+
+export interface RegisteredOAuthClient {
+  clientId: string;
+  redirectUris: string[];
+  grantTypes: string[];
+  responseTypes: string[];
+  scopes: string[];
+  tokenEndpointAuthMethod: string;
+  clientName?: string;
+  createdAt: Date;
+}
+
 function slugifyWorkspaceName(value: string) {
   return value
     .toLowerCase()
@@ -277,6 +300,140 @@ export class AuthService {
       throw new Error("Invalid refresh token");
     }
     return payload;
+  }
+
+  async registerOAuthClient(input: {
+    redirectUris: string[];
+    grantTypes?: string[];
+    responseTypes?: string[];
+    scopes?: string[];
+    tokenEndpointAuthMethod?: string;
+    clientName?: string;
+  }) {
+    await this.ready;
+
+    const clientId = `nexian_${crypto.randomBytes(12).toString("hex")}`;
+    const clientSecret = crypto.randomBytes(32).toString("base64url");
+    const grantTypes = input.grantTypes?.length ? input.grantTypes : ["authorization_code", "refresh_token"];
+    const responseTypes = input.responseTypes?.length ? input.responseTypes : ["code"];
+    const scopes = input.scopes?.length ? input.scopes : ["mcp"];
+    const tokenEndpointAuthMethod = input.tokenEndpointAuthMethod ?? "client_secret_basic";
+
+    await pool.query(
+      `
+        INSERT INTO oauth_clients (
+          client_id,
+          client_secret_hash,
+          redirect_uris,
+          grant_types,
+          response_types,
+          scope,
+          token_endpoint_auth_method,
+          client_name,
+          created_at
+        ) VALUES ($1, $2, $3::text[], $4::text[], $5::text[], $6::text[], $7, $8, NOW())
+      `,
+      [
+        clientId,
+        hashPassword(clientSecret),
+        input.redirectUris,
+        grantTypes,
+        responseTypes,
+        scopes,
+        tokenEndpointAuthMethod,
+        input.clientName ?? null
+      ]
+    );
+
+    return {
+      clientId,
+      clientSecret,
+      redirectUris: input.redirectUris,
+      grantTypes,
+      responseTypes,
+      scopes,
+      tokenEndpointAuthMethod,
+      clientName: input.clientName,
+      createdAt: new Date()
+    };
+  }
+
+  async getOAuthClient(clientId: string): Promise<RegisteredOAuthClient | undefined> {
+    await this.ready;
+
+    const result = await pool.query<OAuthClientRow>(
+      `
+        SELECT
+          client_id,
+          client_secret_hash,
+          redirect_uris,
+          grant_types,
+          response_types,
+          scope,
+          token_endpoint_auth_method,
+          client_name,
+          created_at
+        FROM oauth_clients
+        WHERE client_id = $1
+        LIMIT 1
+      `,
+      [clientId]
+    );
+
+    const row = result.rows[0];
+    if (!row) {
+      return undefined;
+    }
+
+    return {
+      clientId: row.client_id,
+      redirectUris: row.redirect_uris,
+      grantTypes: row.grant_types,
+      responseTypes: row.response_types,
+      scopes: row.scope,
+      tokenEndpointAuthMethod: row.token_endpoint_auth_method,
+      clientName: row.client_name ?? undefined,
+      createdAt: row.created_at
+    };
+  }
+
+  async validateOAuthClient(clientId: string, clientSecret: string) {
+    await this.ready;
+
+    const result = await pool.query<OAuthClientRow>(
+      `
+        SELECT
+          client_id,
+          client_secret_hash,
+          redirect_uris,
+          grant_types,
+          response_types,
+          scope,
+          token_endpoint_auth_method,
+          client_name,
+          created_at
+        FROM oauth_clients
+        WHERE client_id = $1
+        LIMIT 1
+      `,
+      [clientId]
+    );
+
+    const row = result.rows[0];
+    if (!row || !verifyPassword(clientSecret, row.client_secret_hash)) {
+      return undefined;
+    }
+
+    return {
+      clientId: row.client_id,
+      redirectUris: row.redirect_uris,
+      grantTypes: row.grant_types,
+      responseTypes: row.response_types,
+      scopes: row.scope,
+      tokenEndpointAuthMethod: row.token_endpoint_auth_method,
+      clientName: row.client_name ?? undefined,
+      createdAt: row.created_at
+    } satisfies RegisteredOAuthClient;
   }
 
   async createAuthorizationCode(input: {

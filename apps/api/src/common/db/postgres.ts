@@ -65,6 +65,20 @@ export async function ensureDatabaseSchema() {
   `);
 
   await pool.query(`
+    CREATE TABLE IF NOT EXISTS oauth_clients (
+      client_id TEXT PRIMARY KEY,
+      client_secret_hash TEXT NOT NULL,
+      redirect_uris TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[],
+      grant_types TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[],
+      response_types TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[],
+      scope TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[],
+      token_endpoint_auth_method TEXT NOT NULL DEFAULT 'client_secret_basic',
+      client_name TEXT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `);
+
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS connected_accounts (
       id TEXT PRIMARY KEY,
       tenant_id TEXT NOT NULL,

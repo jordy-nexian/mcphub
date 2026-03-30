@@ -60,6 +60,15 @@ const oauthTokenSchema = z.object({
   refresh_token: z.string().optional()
 });
 
+const oauthRegistrationSchema = z.object({
+  redirect_uris: z.array(z.string().url()).min(1),
+  grant_types: z.array(z.string()).optional(),
+  response_types: z.array(z.string()).optional(),
+  scope: z.string().optional(),
+  token_endpoint_auth_method: z.enum(["client_secret_post", "client_secret_basic"]).optional(),
+  client_name: z.string().min(1).optional()
+});
+
 function parseBasicClientCredentials(authorizationHeader: string | undefined) {
   if (!authorizationHeader?.startsWith("Basic ")) {
     return undefined;
@@ -279,6 +288,7 @@ export function registerApiRoutes(
     issuer: deps.config.apiUrl,
     authorization_endpoint: `${deps.config.apiUrl}/oauth/authorize`,
     token_endpoint: `${deps.config.apiUrl}/oauth/token`,
+    registration_endpoint: `${deps.config.apiUrl}/oauth/register`,
     response_types_supported: ["code"],
     grant_types_supported: ["authorization_code", "refresh_token"],
     token_endpoint_auth_methods_supported: ["client_secret_post", "client_secret_basic"],
@@ -286,13 +296,44 @@ export function registerApiRoutes(
     scopes_supported: deps.config.mcpOauthScopes
   }));
 
+  app.post("/oauth/register", async (request, reply) => {
+    const body = oauthRegistrationSchema.parse(request.body);
+    const client = await deps.authService.registerOAuthClient({
+      redirectUris: body.redirect_uris,
+      grantTypes: body.grant_types,
+      responseTypes: body.response_types,
+      scopes: body.scope?.split(/\s+/).filter(Boolean),
+      tokenEndpointAuthMethod: body.token_endpoint_auth_method,
+      clientName: body.client_name
+    });
+
+    return reply.status(201).send({
+      client_id: client.clientId,
+      client_secret: client.clientSecret,
+      redirect_uris: client.redirectUris,
+      grant_types: client.grantTypes,
+      response_types: client.responseTypes,
+      scope: client.scopes.join(" "),
+      token_endpoint_auth_method: client.tokenEndpointAuthMethod,
+      client_name: client.clientName,
+      client_id_issued_at: Math.floor(client.createdAt.getTime() / 1000),
+      client_secret_expires_at: 0
+    });
+  });
+
   app.get("/oauth/authorize", async (request, reply) => {
     const query = oauthAuthorizeQuerySchema.parse(request.query);
-    if (query.client_id !== deps.config.mcpOauthClientId) {
+    const registeredClient =
+      query.client_id === deps.config.mcpOauthClientId ? undefined : await deps.authService.getOAuthClient(query.client_id);
+
+    if (query.client_id !== deps.config.mcpOauthClientId && !registeredClient) {
       return reply.status(400).send("Unknown OAuth client");
     }
 
-    if (!deps.config.mcpOauthRedirectUris.includes(query.redirect_uri)) {
+    const allowedRedirectUris =
+      query.client_id === deps.config.mcpOauthClientId ? deps.config.mcpOauthRedirectUris : registeredClient?.redirectUris ?? [];
+
+    if (!allowedRedirectUris.includes(query.redirect_uri)) {
       return reply.status(400).send("Redirect URI is not allowed");
     }
 
@@ -373,10 +414,26 @@ export function registerApiRoutes(
     const basicCredentials = parseBasicClientCredentials(request.headers.authorization);
     const clientId = body.client_id ?? basicCredentials?.clientId;
     const clientSecret = body.client_secret ?? basicCredentials?.clientSecret;
+    if (!clientId || !clientSecret) {
+      return reply.status(401).send({ error: "invalid_client" });
+    }
+
+    const registeredClient =
+      clientId === deps.config.mcpOauthClientId
+        ? {
+            clientId: deps.config.mcpOauthClientId,
+            redirectUris: deps.config.mcpOauthRedirectUris,
+            grantTypes: ["authorization_code", "refresh_token"],
+            responseTypes: ["code"],
+            scopes: deps.config.mcpOauthScopes,
+            tokenEndpointAuthMethod: "client_secret_basic",
+            createdAt: new Date(0)
+          }
+        : await deps.authService.validateOAuthClient(clientId, clientSecret);
 
     if (
-      clientId !== deps.config.mcpOauthClientId ||
-      clientSecret !== deps.config.mcpOauthClientSecret
+      !registeredClient ||
+      (clientId === deps.config.mcpOauthClientId && clientSecret !== deps.config.mcpOauthClientSecret)
     ) {
       return reply.status(401).send({ error: "invalid_client" });
     }
