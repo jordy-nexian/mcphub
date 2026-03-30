@@ -54,11 +54,28 @@ const oauthTokenSchema = z.object({
   grant_type: z.enum(["authorization_code", "refresh_token"]),
   code: z.string().optional(),
   redirect_uri: z.string().url().optional(),
-  client_id: z.string().min(1),
-  client_secret: z.string().min(1),
+  client_id: z.string().min(1).optional(),
+  client_secret: z.string().min(1).optional(),
   code_verifier: z.string().optional(),
   refresh_token: z.string().optional()
 });
+
+function parseBasicClientCredentials(authorizationHeader: string | undefined) {
+  if (!authorizationHeader?.startsWith("Basic ")) {
+    return undefined;
+  }
+
+  const decoded = Buffer.from(authorizationHeader.slice("Basic ".length), "base64").toString("utf8");
+  const separatorIndex = decoded.indexOf(":");
+  if (separatorIndex === -1) {
+    return undefined;
+  }
+
+  return {
+    clientId: decoded.slice(0, separatorIndex),
+    clientSecret: decoded.slice(separatorIndex + 1)
+  };
+}
 
 function applyCors(reply: FastifyReply, origin: string) {
   reply.header("access-control-allow-origin", origin);
@@ -353,10 +370,13 @@ export function registerApiRoutes(
 
   app.post("/oauth/token", async (request, reply) => {
     const body = oauthTokenSchema.parse(request.body);
+    const basicCredentials = parseBasicClientCredentials(request.headers.authorization);
+    const clientId = body.client_id ?? basicCredentials?.clientId;
+    const clientSecret = body.client_secret ?? basicCredentials?.clientSecret;
 
     if (
-      body.client_id !== deps.config.mcpOauthClientId ||
-      body.client_secret !== deps.config.mcpOauthClientSecret
+      clientId !== deps.config.mcpOauthClientId ||
+      clientSecret !== deps.config.mcpOauthClientSecret
     ) {
       return reply.status(401).send({ error: "invalid_client" });
     }
@@ -368,7 +388,7 @@ export function registerApiRoutes(
 
       const { code, user } = await deps.authService.consumeAuthorizationCode(
         body.code,
-        body.client_id,
+        clientId,
         body.redirect_uri
       );
 

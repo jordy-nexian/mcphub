@@ -1,4 +1,5 @@
 import Fastify from "fastify";
+import { URLSearchParams } from "node:url";
 
 import { buildAppConfig } from "./common/config/env";
 import { ensureDatabaseSchema } from "./common/db/postgres";
@@ -9,6 +10,20 @@ import { registerApiRoutes } from "./modules/mcp/routes";
 
 const config = buildAppConfig();
 const app = Fastify({ logger: true });
+
+app.addContentTypeParser(
+  "application/x-www-form-urlencoded",
+  { parseAs: "string" },
+  (_request, body, done) => {
+    try {
+      const params = new URLSearchParams(typeof body === "string" ? body : body.toString("utf8"));
+      const parsed = Object.fromEntries(params.entries());
+      done(null, parsed);
+    } catch (error) {
+      done(error as Error, undefined);
+    }
+  }
+);
 
 const auditService = new AuditService();
 const authService = new AuthService();
