@@ -90,17 +90,50 @@ export const haloPsaAdapter: ProviderAdapter = {
   },
   getTools() {
     return [
-      createStubTool("find_customer", "Find a customer by name or account reference."),
-      createStubTool("list_open_tickets", "List open HaloPSA tickets for a customer or queue."),
-      createStubTool("get_ticket", "Get a HaloPSA ticket by identifier, ticket number, or display reference."),
-      createStubTool("list_ticket_actions", "List actions and notes recorded against a HaloPSA ticket."),
-      createStubTool("search_projects", "Search HaloPSA projects and project tickets by name, code, or summary."),
-      createStubTool("find_contact", "Find HaloPSA contacts or end users by name, email, or phone."),
-      createStubTool("search_documents", "Search HaloPSA knowledge base articles and documentation."),
-      createStubTool("list_devices_for_site", "List HaloPSA assets and devices for a site or location."),
-      createStubTool("get_recent_invoices", "List recent HaloPSA invoices or billing records."),
-      createStubTool("create_draft_ticket", "Create a guarded draft HaloPSA ticket with minimal safe fields."),
-      createStubTool("add_internal_note", "Add a non-customer-visible internal note or action to a HaloPSA ticket.")
+      createStubTool(
+        "find_customer",
+        "Use when the user wants to identify an organisation, customer account, or client record in HaloPSA by name, reference, or partial account text."
+      ),
+      createStubTool(
+        "list_open_tickets",
+        "Use when the user wants a queue-style view of active tickets, open incidents, or tickets for a customer. Prefer this before get_ticket if the exact ticket id is unknown."
+      ),
+      createStubTool(
+        "get_ticket",
+        "Use when the user gives a specific HaloPSA ticket number, id, or visible ticket reference and wants the full details for one ticket."
+      ),
+      createStubTool(
+        "list_ticket_actions",
+        "Use when the user wants the notes, updates, engineer actions, or activity history recorded against a specific HaloPSA ticket."
+      ),
+      createStubTool(
+        "search_projects",
+        "Use when the user asks about projects, project tickets, project status, or project work in HaloPSA."
+      ),
+      createStubTool(
+        "find_contact",
+        "Use when the user wants a person, end user, requester, or contact in HaloPSA by name, email address, or phone number."
+      ),
+      createStubTool(
+        "search_documents",
+        "Use when the user wants knowledge base articles, SOP-style documentation, or HaloPSA knowledge records."
+      ),
+      createStubTool(
+        "list_devices_for_site",
+        "Use when the user asks what devices, assets, or inventory items are recorded for a HaloPSA site or location."
+      ),
+      createStubTool(
+        "get_recent_invoices",
+        "Use when the user wants recent invoice, billing, or finance records from HaloPSA in a read-only way."
+      ),
+      createStubTool(
+        "create_draft_ticket",
+        "Use only for safe ticket creation when the user explicitly wants a new ticket created. This should create a draft-style service ticket with minimal fields."
+      ),
+      createStubTool(
+        "add_internal_note",
+        "Use when the user explicitly wants to add an internal, non-customer-visible update or engineer note to an existing HaloPSA ticket."
+      )
     ];
   }
 };

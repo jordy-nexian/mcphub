@@ -345,7 +345,10 @@ export class ConnectorService {
     const openTickets = tickets.filter(isTicketOpen).slice(0, 25);
 
     return {
-      summary: openTickets.length > 0 ? `Found ${openTickets.length} open HaloPSA tickets.` : "No open HaloPSA tickets found.",
+      summary:
+        openTickets.length > 0
+          ? `Found ${openTickets.length} open HaloPSA tickets. Results include ticket id, summary, status, customer, priority, and last action time.`
+          : "No open HaloPSA tickets found.",
       data: openTickets.map((ticket) => ({
         id: pickNumber(ticket, ["id", "ticket_id", "TicketID"]),
         summary: pickString(ticket, ["summary", "subject", "title"]) ?? "Untitled ticket",
@@ -383,7 +386,10 @@ export class ConnectorService {
     const actions = normalizeCollectionPayload(payload, ["actions"]).slice(0, 50);
 
     return {
-      summary: actions.length > 0 ? `Loaded ${actions.length} HaloPSA actions for ticket ${ticketId}.` : `No HaloPSA actions found for ticket ${ticketId}.`,
+      summary:
+        actions.length > 0
+          ? `Loaded ${actions.length} HaloPSA actions for ticket ${ticketId}. Results include agent, note text, action type, and created time.`
+          : `No HaloPSA actions found for ticket ${ticketId}.`,
       data: actions.map((action) => ({
         id: pickNumber(action, ["id", "action_id"]),
         ticketId: pickNumber(action, ["ticket_id", "ticketid"]),
@@ -418,7 +424,10 @@ export class ConnectorService {
     const projects = normalizeCollectionPayload(payload, ["projects"]).slice(0, 25);
 
     return {
-      summary: projects.length > 0 ? `Found ${projects.length} HaloPSA projects.` : "No HaloPSA projects matched that query.",
+      summary:
+        projects.length > 0
+          ? `Found ${projects.length} HaloPSA projects. Results include project id, summary, status, customer, and manager where available.`
+          : "No HaloPSA projects matched that query.",
       data: projects.map((project) => ({
         id: pickNumber(project, ["id", "project_id", "ticket_id"]),
         summary: pickString(project, ["summary", "name", "title"]),
@@ -454,7 +463,10 @@ export class ConnectorService {
     const contacts = normalizeCollectionPayload(payload, ["users", "contacts"]).slice(0, 25);
 
     return {
-      summary: contacts.length > 0 ? `Found ${contacts.length} HaloPSA contacts.` : "No HaloPSA contacts matched that query.",
+      summary:
+        contacts.length > 0
+          ? `Found ${contacts.length} HaloPSA contacts. Results include contact id, name, email, phone, and associated customer or site where available.`
+          : "No HaloPSA contacts matched that query.",
       data: contacts.map((contact) => ({
         id: pickNumber(contact, ["id", "user_id", "contact_id"]),
         name: pickString(contact, ["name", "display_name", "fullname", "full_name"]),
@@ -490,7 +502,10 @@ export class ConnectorService {
     const documents = normalizeCollectionPayload(payload, ["articles", "kbarticles", "knowledgebase"]).slice(0, 25);
 
     return {
-      summary: documents.length > 0 ? `Found ${documents.length} HaloPSA knowledge articles.` : "No HaloPSA knowledge articles matched that query.",
+      summary:
+        documents.length > 0
+          ? `Found ${documents.length} HaloPSA knowledge articles. Results include article id, title, category, excerpt, and last updated time where available.`
+          : "No HaloPSA knowledge articles matched that query.",
       data: documents.map((document) => ({
         id: pickNumber(document, ["id", "kbarticle_id", "article_id"]),
         title: pickString(document, ["title", "summary", "name"]),
@@ -551,7 +566,10 @@ export class ConnectorService {
     const assets = normalizeCollectionPayload(payload, ["assets", "devices"]).slice(0, 50);
 
     return {
-      summary: assets.length > 0 ? `Found ${assets.length} HaloPSA devices for site ${siteId}.` : `No HaloPSA devices found for site ${siteId}.`,
+      summary:
+        assets.length > 0
+          ? `Found ${assets.length} HaloPSA devices for site ${siteId}. Results include asset id, name, type, site, status, and serial number where available.`
+          : `No HaloPSA devices found for site ${siteId}.`,
       data: assets.map((asset) => ({
         id: pickNumber(asset, ["id", "asset_id"]),
         name: pickString(asset, ["name", "inventory_number", "hostname"]),
@@ -584,7 +602,10 @@ export class ConnectorService {
     const invoices = normalizeCollectionPayload(payload, ["invoices"]).slice(0, count);
 
     return {
-      summary: invoices.length > 0 ? `Loaded ${invoices.length} recent HaloPSA invoices.` : "No recent HaloPSA invoices found.",
+      summary:
+        invoices.length > 0
+          ? `Loaded ${invoices.length} recent HaloPSA invoices. Results include invoice id, reference, customer, status, total, and issued date where available.`
+          : "No recent HaloPSA invoices found.",
       data: invoices.map((invoice) => ({
         id: pickNumber(invoice, ["id", "invoice_id"]),
         reference: pickString(invoice, ["invoice_number", "reference", "ref"]),
@@ -627,7 +648,7 @@ export class ConnectorService {
 
     const ticket = (await response.json()) as HaloGenericRecord;
     return {
-      summary: `Created draft HaloPSA ticket ${pickNumber(ticket, ["id", "ticket_id", "TicketID"]) ?? ""}.`,
+      summary: "Created a draft HaloPSA ticket. Result includes the new ticket id, summary, and current status.",
       data: [
         {
           id: pickNumber(ticket, ["id", "ticket_id", "TicketID"]),
@@ -666,7 +687,7 @@ export class ConnectorService {
 
     const action = (await response.json()) as HaloGenericRecord;
     return {
-      summary: `Added an internal HaloPSA note to ticket ${ticketId}.`,
+      summary: `Added an internal HaloPSA note to ticket ${ticketId}. Result includes the created action id and stored note text.`,
       data: [
         {
           id: pickNumber(action, ["id", "action_id"]),
@@ -719,7 +740,7 @@ export class ConnectorService {
     }
 
     return {
-      summary: `Loaded HaloPSA ticket ${id}.`,
+      summary: `Loaded HaloPSA ticket ${id}. Result includes the ticket summary, status, customer, priority, and raw Halo details.`,
       data: [
         {
           id: pickNumber(ticket, ["id", "ticket_id", "TicketID"]),
@@ -757,7 +778,10 @@ export class ConnectorService {
     const clients = Array.isArray(payload) ? payload : (payload.clients ?? []);
 
     return {
-      summary: clients.length > 0 ? `Found ${clients.length} HaloPSA customers.` : "No HaloPSA customers matched that query.",
+      summary:
+        clients.length > 0
+          ? `Found ${clients.length} HaloPSA customers. Results include customer id, name, reference, email, and phone where available.`
+          : "No HaloPSA customers matched that query.",
       data: clients.map((client) => ({
         id: pickNumber(client, ["id", "client_id"]),
         name: pickString(client, ["name", "client_name"]),
