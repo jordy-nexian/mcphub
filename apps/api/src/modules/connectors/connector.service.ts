@@ -155,11 +155,20 @@ async function haloFetch(input: string | URL, init: RequestInit & { bodyPreview?
 export class ConnectorService {
   private readonly registry = getProviderRegistry();
   private readonly encryption = TokenEncryptionService.fromBase64(config.tokenEncryptionKeyBase64);
-  private readonly redis = new Redis(config.redisUrl, { lazyConnect: true });
+  private readonly redis = config.redisUrl
+    ? new Redis(config.redisUrl, {
+        lazyConnect: true,
+        maxRetriesPerRequest: 1
+      })
+    : undefined;
   private readonly refreshService = new TokenRefreshService(this.redis, this.encryption);
   private readonly store = ConnectedAccountStore.createDefault();
 
-  constructor(private readonly auditService: AuditService) {}
+  constructor(private readonly auditService: AuditService) {
+    this.redis?.on("error", (error) => {
+      console.warn("[redis]", error.message);
+    });
+  }
 
   async getProviders(tenantId?: string, userId?: string) {
     const accounts = tenantId && userId ? await this.store.findByTenantUser(tenantId, userId) : [];

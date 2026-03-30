@@ -12,7 +12,7 @@ const envSchema = z.object({
   TOKEN_ENCRYPTION_KEY_BASE64: z.string().min(16).default(Buffer.alloc(32).toString("base64")),
   SESSION_SECRET: z.string().min(8).default("local-session-secret"),
   OAUTH_STATE_SIGNING_SECRET: z.string().min(8).default("local-oauth-state-secret"),
-  REDIS_URL: z.string().default("redis://localhost:6379")
+  REDIS_URL: z.string().optional()
 });
 
 export function buildAppConfig() {
