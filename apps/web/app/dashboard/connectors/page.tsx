@@ -1,11 +1,15 @@
-import { Nav } from "../../../components/nav";
+import { PageHeader } from "../../../components/page-header";
 import { WorkspaceConsole } from "../../../components/workspace-console";
 
 export default function ConnectorsPage() {
   return (
-    <main className="shell stack">
-      <Nav />
+    <div className="stack">
+      <PageHeader
+        eyebrow="Customer Workspace"
+        title="Connected products"
+        description="Manage tenant integrations, onboarding flows, and safe AI tool exposure from a single workspace."
+      />
       <WorkspaceConsole />
-    </main>
+    </div>
   );
 }

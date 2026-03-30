@@ -1,5 +1,6 @@
 "use client";
 
+import type { Route } from "next";
 import { useRouter } from "next/navigation";
 import { useMemo, useState } from "react";
 
@@ -10,8 +11,8 @@ type Mode = "login" | "register";
 export default function LoginPage() {
   const router = useRouter();
   const [mode, setMode] = useState<Mode>("login");
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
+  const [email, setEmail] = useState("admin@nexian.co.uk");
+  const [password, setPassword] = useState("demo12345");
   const [displayName, setDisplayName] = useState("");
   const [workspaceName, setWorkspaceName] = useState("");
   const [notice, setNotice] = useState("");
@@ -40,13 +41,13 @@ export default function LoginPage() {
         )
       });
 
-      const payload = (await response.json()) as { error?: string; message?: string; token?: string };
+      const payload = (await response.json()) as { error?: string; message?: string; tenant?: { slug: string } };
       if (!response.ok) {
         throw new Error(payload.message ?? payload.error ?? "Authentication failed");
       }
 
       writePlatformSession(payload as never);
-      router.push("/dashboard/connectors");
+      router.push((payload.tenant?.slug?.includes("nexian") ? "/admin/dashboard" : "/dashboard") as Route);
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "Could not authenticate.");
     } finally {
@@ -55,35 +56,38 @@ export default function LoginPage() {
   }
 
   return (
-    <main className="shell">
-      <section className="panel stack" style={{ maxWidth: 560, margin: "80px auto" }}>
-        <span className="eyebrow">Platform Login</span>
-        <h1 style={{ margin: 0 }}>{mode === "login" ? "Sign in to Nexian MCP Hub" : "Create your Nexian workspace"}</h1>
-        <p className="muted" style={{ margin: 0 }}>
-          {mode === "login"
-            ? "Use your platform account to manage connectors and issue user-scoped MCP tokens."
-            : "Create a workspace owner account. Connector access and MCP tokens will be scoped to this tenant and user."}
-        </p>
+    <main className="auth-shell">
+      <section className="auth-card">
+        <div className="stack">
+          <span className="eyebrow">Nexian Command</span>
+          <h1>{mode === "login" ? "Sign in to the MSP platform" : "Create a customer workspace"}</h1>
+          <p className="muted">
+            {mode === "login"
+              ? "Access the Nexian operations console or a managed customer workspace."
+              : "Create a workspace owner account for a new customer environment."}
+          </p>
+        </div>
 
         {mode === "register" ? (
           <>
             <label className="stack">
-              <span>Full name</span>
+              <span className="field-label">Full name</span>
               <input value={displayName} onChange={(event) => setDisplayName(event.target.value)} placeholder="Jordy Whitehouse" />
             </label>
             <label className="stack">
-              <span>Workspace name</span>
-              <input value={workspaceName} onChange={(event) => setWorkspaceName(event.target.value)} placeholder="Nexian MSP" />
+              <span className="field-label">Workspace name</span>
+              <input value={workspaceName} onChange={(event) => setWorkspaceName(event.target.value)} placeholder="Nexian Customer Workspace" />
             </label>
           </>
         ) : null}
 
         <label className="stack">
-          <span>Email</span>
-          <input value={email} onChange={(event) => setEmail(event.target.value)} type="email" placeholder="admin@example.com" />
+          <span className="field-label">Email</span>
+          <input value={email} onChange={(event) => setEmail(event.target.value)} type="email" placeholder="admin@nexian.co.uk" />
         </label>
+
         <label className="stack">
-          <span>Password</span>
+          <span className="field-label">Password</span>
           <input value={password} onChange={(event) => setPassword(event.target.value)} type="password" placeholder="Use 8+ characters" />
         </label>
 
@@ -96,6 +100,11 @@ export default function LoginPage() {
           <button className="button secondary" type="button" onClick={() => setMode(mode === "login" ? "register" : "login")}>
             {mode === "login" ? "Create account" : "I already have an account"}
           </button>
+        </div>
+
+        <div className="auth-footnote">
+          <strong>Seeded MSP account</strong>
+          <p>Use `admin@nexian.co.uk` with password `demo12345` to access the Nexian MSP console immediately.</p>
         </div>
       </section>
     </main>

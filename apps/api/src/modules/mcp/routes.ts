@@ -6,6 +6,7 @@ import { z } from "zod";
 import type { AuditService } from "../audit/audit.service";
 import type { AuthService, PlatformAuthContext } from "../auth/auth.service";
 import type { ConnectorService } from "../connectors/connector.service";
+import type { PlatformService } from "../platform/platform.service";
 
 const oauthQuerySchema = z.object({
   tenantId: z.string().min(1),
@@ -238,6 +239,7 @@ export function registerApiRoutes(
     authService: AuthService;
     connectorService: ConnectorService;
     auditService: AuditService;
+    platformService: PlatformService;
     config: {
       apiUrl: string;
       appUrl: string;
@@ -603,5 +605,45 @@ export function registerApiRoutes(
     );
 
     return { result };
+  });
+
+  app.get("/platform/overview", async () => deps.platformService.getOverview());
+
+  app.get("/platform/tenants", async () => ({
+    tenants: await deps.platformService.listTenants()
+  }));
+
+  app.get("/platform/tenants/:tenantId", async (request, reply) => {
+    const { tenantId } = request.params as { tenantId: string };
+    const detail = await deps.platformService.getTenantDetail(tenantId);
+
+    if (!detail) {
+      return reply.status(404).send({ error: "not_found" });
+    }
+
+    return detail;
+  });
+
+  app.get("/platform/users", async () => ({
+    users: await deps.platformService.listUsers()
+  }));
+
+  app.get("/platform/connectors", async () => ({
+    connectors: await deps.platformService.getConnectorSummary()
+  }));
+
+  app.get("/platform/audit", async (request) => {
+    const query = z
+      .object({
+        tenantId: z.string().optional(),
+        limit: z.coerce.number().int().positive().max(100).optional()
+      })
+      .safeParse(request.query);
+
+    return {
+      events: await deps.auditService.listRecent(
+        query.success ? { tenantId: query.data.tenantId, limit: query.data.limit } : undefined
+      )
+    };
   });
 }
