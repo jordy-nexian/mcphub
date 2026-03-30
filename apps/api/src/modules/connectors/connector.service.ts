@@ -120,6 +120,38 @@ function textMatches(value: string | undefined, query: string) {
   return value.toLowerCase().includes(query.toLowerCase());
 }
 
+const haloDebugEnabled = process.env.HALO_DEBUG === "true";
+
+function logHaloDebug(event: string, payload: Record<string, unknown>) {
+  if (!haloDebugEnabled) {
+    return;
+  }
+
+  console.info("[halo-debug]", JSON.stringify({ event, ...payload }));
+}
+
+async function haloFetch(input: string | URL, init: RequestInit & { bodyPreview?: unknown } = {}) {
+  const url = typeof input === "string" ? input : input.toString();
+  const { bodyPreview, ...requestInit } = init;
+
+  logHaloDebug("request", {
+    method: requestInit.method ?? "GET",
+    url,
+    body: bodyPreview ?? (typeof requestInit.body === "string" ? requestInit.body : undefined)
+  });
+
+  const response = await fetch(url, requestInit);
+
+  logHaloDebug("response", {
+    method: requestInit.method ?? "GET",
+    url,
+    status: response.status,
+    ok: response.ok
+  });
+
+  return response;
+}
+
 export class ConnectorService {
   private readonly registry = getProviderRegistry();
   private readonly encryption = TokenEncryptionService.fromBase64(config.tokenEncryptionKeyBase64);
@@ -345,7 +377,7 @@ export class ConnectorService {
       url.searchParams.set("search", query);
     }
 
-    const response = await fetch(url, {
+    const response = await haloFetch(url, {
       headers: buildHaloHeaders(accessToken)
     });
 
@@ -416,7 +448,7 @@ export class ConnectorService {
     url.searchParams.set("search", query);
     url.searchParams.set("count", String(count));
 
-    const response = await fetch(url, {
+    const response = await haloFetch(url, {
       headers: buildHaloHeaders(accessToken)
     });
 
@@ -440,7 +472,7 @@ export class ConnectorService {
     url.searchParams.set("count", "50");
     url.searchParams.set("ticket_id", ticketId);
 
-    const response = await fetch(url, {
+    const response = await haloFetch(url, {
       headers: buildHaloHeaders(accessToken)
     });
 
@@ -478,7 +510,7 @@ export class ConnectorService {
       url.searchParams.set("search", query);
     }
 
-    const response = await fetch(url, {
+    const response = await haloFetch(url, {
       headers: buildHaloHeaders(accessToken)
     });
 
@@ -517,7 +549,7 @@ export class ConnectorService {
     url.searchParams.set("count", "25");
     url.searchParams.set("search", query);
 
-    const response = await fetch(url, {
+    const response = await haloFetch(url, {
       headers: buildHaloHeaders(accessToken)
     });
 
@@ -597,7 +629,7 @@ export class ConnectorService {
       const siteUrl = new URL(`${getHaloBaseUrl()}/api/site`);
       siteUrl.searchParams.set("count", "10");
       siteUrl.searchParams.set("search", siteRef);
-      const siteResponse = await fetch(siteUrl, {
+      const siteResponse = await haloFetch(siteUrl, {
         headers: buildHaloHeaders(accessToken)
       });
 
@@ -620,7 +652,7 @@ export class ConnectorService {
     assetUrl.searchParams.set("count", "50");
     assetUrl.searchParams.set("site_id", siteId);
 
-    const response = await fetch(assetUrl, {
+    const response = await haloFetch(assetUrl, {
       headers: buildHaloHeaders(accessToken)
     });
 
@@ -656,7 +688,7 @@ export class ConnectorService {
     const url = new URL(`${getHaloBaseUrl()}/api/invoices`);
     url.searchParams.set("count", String(count));
 
-    const response = await fetch(url, {
+    const response = await haloFetch(url, {
       headers: buildHaloHeaders(accessToken)
     });
 
@@ -702,10 +734,11 @@ export class ConnectorService {
       priority_id: pickNumber(input, ["priorityId", "priority_id"])
     };
 
-    const response = await fetch(`${getHaloBaseUrl()}/api/tickets`, {
+    const response = await haloFetch(`${getHaloBaseUrl()}/api/tickets`, {
       method: "POST",
       headers: buildHaloJsonHeaders(accessToken),
-      body: JSON.stringify(payload)
+      body: JSON.stringify(payload),
+      bodyPreview: payload
     });
 
     if (!response.ok) {
@@ -736,7 +769,7 @@ export class ConnectorService {
       throw new Error("add_internal_note requires a ticket id and note");
     }
 
-    const response = await fetch(`${getHaloBaseUrl()}/api/actions`, {
+    const response = await haloFetch(`${getHaloBaseUrl()}/api/actions`, {
       method: "POST",
       headers: buildHaloJsonHeaders(accessToken),
       body: JSON.stringify({
@@ -744,7 +777,13 @@ export class ConnectorService {
         note,
         note_html: note,
         hiddenfromuser: true
-      })
+      }),
+      bodyPreview: {
+        ticket_id: ticketId,
+        note,
+        note_html: note,
+        hiddenfromuser: true
+      }
     });
 
     if (!response.ok) {
@@ -776,7 +815,7 @@ export class ConnectorService {
 
     let ticket: HaloTicketRecord | undefined;
 
-    const directResponse = await fetch(`${getHaloBaseUrl()}/api/tickets/${id}`, {
+    const directResponse = await haloFetch(`${getHaloBaseUrl()}/api/tickets/${id}`, {
       headers: buildHaloHeaders(accessToken)
     });
 
@@ -787,7 +826,7 @@ export class ConnectorService {
       searchUrl.searchParams.set("search", id);
       searchUrl.searchParams.set("count", "25");
 
-      const searchResponse = await fetch(searchUrl, {
+      const searchResponse = await haloFetch(searchUrl, {
         headers: buildHaloHeaders(accessToken)
       });
 
