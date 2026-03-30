@@ -65,7 +65,7 @@ const oauthRegistrationSchema = z.object({
   grant_types: z.array(z.string()).optional(),
   response_types: z.array(z.string()).optional(),
   scope: z.string().optional(),
-  token_endpoint_auth_method: z.enum(["client_secret_post", "client_secret_basic"]).optional(),
+  token_endpoint_auth_method: z.enum(["client_secret_post", "client_secret_basic", "none"]).optional(),
   client_name: z.string().min(1).optional()
 });
 
@@ -291,7 +291,7 @@ export function registerApiRoutes(
     registration_endpoint: `${deps.config.apiUrl}/oauth/register`,
     response_types_supported: ["code"],
     grant_types_supported: ["authorization_code", "refresh_token"],
-    token_endpoint_auth_methods_supported: ["client_secret_post", "client_secret_basic"],
+    token_endpoint_auth_methods_supported: ["client_secret_post", "client_secret_basic", "none"],
     code_challenge_methods_supported: ["plain", "S256"],
     scopes_supported: deps.config.mcpOauthScopes
   }));
@@ -309,7 +309,6 @@ export function registerApiRoutes(
 
     return reply.status(201).send({
       client_id: client.clientId,
-      client_secret: client.clientSecret,
       redirect_uris: client.redirectUris,
       grant_types: client.grantTypes,
       response_types: client.responseTypes,
@@ -317,7 +316,7 @@ export function registerApiRoutes(
       token_endpoint_auth_method: client.tokenEndpointAuthMethod,
       client_name: client.clientName,
       client_id_issued_at: Math.floor(client.createdAt.getTime() / 1000),
-      client_secret_expires_at: 0
+      ...(client.clientSecret ? { client_secret: client.clientSecret, client_secret_expires_at: 0 } : { client_secret_expires_at: 0 })
     });
   });
 
@@ -414,7 +413,7 @@ export function registerApiRoutes(
     const basicCredentials = parseBasicClientCredentials(request.headers.authorization);
     const clientId = body.client_id ?? basicCredentials?.clientId;
     const clientSecret = body.client_secret ?? basicCredentials?.clientSecret;
-    if (!clientId || !clientSecret) {
+    if (!clientId) {
       return reply.status(401).send({ error: "invalid_client" });
     }
 

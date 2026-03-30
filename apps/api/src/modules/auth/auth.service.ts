@@ -313,7 +313,7 @@ export class AuthService {
     await this.ready;
 
     const clientId = `nexian_${crypto.randomBytes(12).toString("hex")}`;
-    const clientSecret = crypto.randomBytes(32).toString("base64url");
+    const clientSecret = input.tokenEndpointAuthMethod === "none" ? undefined : crypto.randomBytes(32).toString("base64url");
     const grantTypes = input.grantTypes?.length ? input.grantTypes : ["authorization_code", "refresh_token"];
     const responseTypes = input.responseTypes?.length ? input.responseTypes : ["code"];
     const scopes = input.scopes?.length ? input.scopes : ["mcp"];
@@ -335,7 +335,7 @@ export class AuthService {
       `,
       [
         clientId,
-        hashPassword(clientSecret),
+        clientSecret ? hashPassword(clientSecret) : "__public_client__",
         input.redirectUris,
         grantTypes,
         responseTypes,
@@ -397,7 +397,7 @@ export class AuthService {
     };
   }
 
-  async validateOAuthClient(clientId: string, clientSecret: string) {
+  async validateOAuthClient(clientId: string, clientSecret?: string) {
     await this.ready;
 
     const result = await pool.query<OAuthClientRow>(
@@ -420,7 +420,24 @@ export class AuthService {
     );
 
     const row = result.rows[0];
-    if (!row || !verifyPassword(clientSecret, row.client_secret_hash)) {
+    if (!row) {
+      return undefined;
+    }
+
+    if (row.token_endpoint_auth_method === "none") {
+      return {
+        clientId: row.client_id,
+        redirectUris: row.redirect_uris,
+        grantTypes: row.grant_types,
+        responseTypes: row.response_types,
+        scopes: row.scope,
+        tokenEndpointAuthMethod: row.token_endpoint_auth_method,
+        clientName: row.client_name ?? undefined,
+        createdAt: row.created_at
+      } satisfies RegisteredOAuthClient;
+    }
+
+    if (!clientSecret || !verifyPassword(clientSecret, row.client_secret_hash)) {
       return undefined;
     }
 
