@@ -1,5 +1,11 @@
 import { PageHeader } from "../../../components/page-header";
-import { demoPermissions } from "../../../lib/demo-data";
+
+const productionGuardrails = [
+  "Connector access is scoped per user and tenant.",
+  "Provider tokens stay encrypted server-side and are never exposed to MCP clients.",
+  "MCP tools are gated by the connected account, tenant membership, and role.",
+  "Write actions remain explicitly constrained to guarded tools such as draft ticket creation and internal notes."
+];
 
 export default function PermissionsPage() {
   return (
@@ -7,19 +13,17 @@ export default function PermissionsPage() {
       <PageHeader
         eyebrow="Guardrails"
         title="Tool permissions"
-        description="Review which customer roles can use which AI-enabled tools."
+        description="Production guardrails are enforced in the platform API and MCP layers, even while the policy editor is being finalised."
       />
 
       <div className="permission-list">
-        {demoPermissions.map((permission) => (
-          <article key={permission.tool} className="permission-item">
+        {productionGuardrails.map((rule) => (
+          <article key={rule} className="permission-item">
             <div>
-              <strong>{permission.tool}</strong>
-              <p>{permission.roles.join(", ")}</p>
+              <strong>Enforced policy</strong>
+              <p>{rule}</p>
             </div>
-            <span className={`status-pill ${permission.enabled ? "connected" : "disconnected"}`}>
-              {permission.enabled ? "Enabled" : "Restricted"}
-            </span>
+            <span className="status-pill connected">Active</span>
           </article>
         ))}
       </div>

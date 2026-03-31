@@ -12,8 +12,8 @@ type Mode = "login" | "register";
 export default function LoginPage() {
   const router = useRouter();
   const [mode, setMode] = useState<Mode>("login");
-  const [email, setEmail] = useState("admin@nexian.co.uk");
-  const [password, setPassword] = useState("demo12345");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [workspaceName, setWorkspaceName] = useState("");
   const [notice, setNotice] = useState("");
@@ -107,8 +107,8 @@ export default function LoginPage() {
         </div>
 
         <div className="auth-footnote">
-          <strong>Seeded MSP account</strong>
-          <p>Use `admin@nexian.co.uk` with password `demo12345` to access the Nexian MSP console immediately.</p>
+          <strong>Production sign-in</strong>
+          <p>Use an existing platform account, or create a new workspace owner account to bootstrap a tenant.</p>
         </div>
       </section>
     </main>

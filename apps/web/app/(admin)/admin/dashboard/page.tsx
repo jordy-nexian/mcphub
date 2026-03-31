@@ -1,9 +1,50 @@
+"use client";
+
+import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
+
 import { PageHeader } from "../../../../components/page-header";
 import { StatsCard } from "../../../../components/stats-card";
-import { demoAuditEvents, demoGlobalConnectors, demoTenants } from "../../../../lib/demo-data";
+import { readPlatformSession, type PlatformSession } from "../../../../lib/platform-auth";
+import { fetchPlatformOverview, type PlatformOverview } from "../../../../lib/platform-api";
 
 export default function AdminDashboardPage() {
-  const liveConnectors = demoGlobalConnectors.filter((item) => item.status === "Connected").length;
+  const router = useRouter();
+  const [session, setSession] = useState<PlatformSession | null>(null);
+  const [overview, setOverview] = useState<PlatformOverview | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [notice, setNotice] = useState("");
+
+  useEffect(() => {
+    const storedSession = readPlatformSession();
+    if (!storedSession) {
+      router.replace("/auth/login");
+      return;
+    }
+
+    setSession(storedSession);
+  }, [router]);
+
+  useEffect(() => {
+    async function loadOverview() {
+      if (!session) {
+        return;
+      }
+
+      setLoading(true);
+      setNotice("");
+
+      try {
+        setOverview(await fetchPlatformOverview(session));
+      } catch (error) {
+        setNotice(error instanceof Error ? error.message : "Could not load platform overview.");
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    void loadOverview();
+  }, [session]);
 
   return (
     <div className="stack">
@@ -13,32 +54,34 @@ export default function AdminDashboardPage() {
         description="Operate customer estates, package the platform, and govern tenant AI access from a single command layer."
       />
 
+      {notice ? <div className="notice">{notice}</div> : null}
+
       <div className="stats-row">
-        <StatsCard value={demoTenants.length} label="Managed customers" trend={{ direction: "up", text: "+1 ready to onboard" }} />
-        <StatsCard value={liveConnectors} label="Live integrations" trend={{ direction: "up", text: "Healthy connector estate" }} />
-        <StatsCard value={demoAuditEvents.length} label="Audit events today" trend={{ direction: "up", text: "Cross-tenant visibility" }} />
-        <StatsCard value="98.7%" label="Workspace availability" />
+        <StatsCard value={loading ? "..." : overview?.metrics.customerTenants ?? 0} label="Managed customers" />
+        <StatsCard value={loading ? "..." : overview?.metrics.connectedAccounts ?? 0} label="Live integrations" />
+        <StatsCard value={loading ? "..." : overview?.recentAudit.length ?? 0} label="Recent audit events" />
+        <StatsCard value={loading ? "..." : overview?.metrics.totalUsers ?? 0} label="Platform users" />
       </div>
 
       <section className="grid two">
         <article className="panel stack">
           <span className="eyebrow">Commercial Readiness</span>
-          <h2>Built to sell</h2>
+          <h2>Built to operate for real</h2>
           <p className="muted">
-            MSP-owned console, customer-facing workspaces, isolated tenant context, and governed MCP access.
+            The MSP console now reflects live tenant, connector, and audit data from Postgres instead of seeded demo workspaces.
           </p>
         </article>
         <article className="panel stack">
           <span className="eyebrow">Customer Estate</span>
           <h2>Tenant health snapshot</h2>
           <div className="tenant-health-list">
-            {demoTenants.map((tenant) => (
+            {(overview?.tenants ?? []).slice(0, 6).map((tenant) => (
               <div key={tenant.id} className="tenant-health-row">
                 <div>
                   <strong>{tenant.name}</strong>
                   <p>{tenant.userCount} users · {tenant.connectorCount} connectors</p>
                 </div>
-                <span className={`status-pill ${tenant.status}`}>{tenant.status}</span>
+                <span className={`status-pill ${tenant.status.toLowerCase()}`}>{tenant.status}</span>
               </div>
             ))}
           </div>

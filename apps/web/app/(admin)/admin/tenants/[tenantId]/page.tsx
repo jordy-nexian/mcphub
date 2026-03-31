@@ -2,42 +2,87 @@
 
 import Link from "next/link";
 import type { Route } from "next";
-import { useParams } from "next/navigation";
-import { useState } from "react";
+import { useParams, useRouter } from "next/navigation";
+import { useEffect, useState } from "react";
 
 import { PageHeader } from "../../../../../components/page-header";
-import { demoAuditEvents, demoGlobalConnectors, demoPermissions, demoTenants, demoUsers } from "../../../../../lib/demo-data";
+import { readPlatformSession, type PlatformSession } from "../../../../../lib/platform-auth";
+import { fetchPlatformTenantDetail, type PlatformTenantDetail } from "../../../../../lib/platform-api";
 
-const tabs = ["Users", "Connectors", "Policies", "Audit"] as const;
+const tabs = ["Users", "Connectors", "Audit"] as const;
 type Tab = (typeof tabs)[number];
 
-export default function TenantDetailPage() {
-  const params = useParams();
-  const [activeTab, setActiveTab] = useState<Tab>("Users");
-  const tenantId = params.tenantId as string;
-  const tenant = demoTenants.find((item) => item.id === tenantId);
+const baselinePolicies = [
+  { tool: "find_customer", scope: "Read", roles: "OWNER, ADMIN, ANALYST, USER" },
+  { tool: "get_ticket_with_actions", scope: "Read", roles: "OWNER, ADMIN, ANALYST, USER" },
+  { tool: "create_draft_ticket", scope: "Guarded write", roles: "OWNER, ADMIN" },
+  { tool: "add_internal_note", scope: "Guarded write", roles: "OWNER, ADMIN" }
+];
 
-  if (!tenant) {
-    return <div className="empty-state"><h3>Tenant not found</h3><p>This customer workspace is not available.</p></div>;
+export default function TenantDetailPage() {
+  const router = useRouter();
+  const params = useParams();
+  const tenantId = params.tenantId as string;
+  const [session, setSession] = useState<PlatformSession | null>(null);
+  const [detail, setDetail] = useState<PlatformTenantDetail | null>(null);
+  const [activeTab, setActiveTab] = useState<Tab>("Users");
+  const [loading, setLoading] = useState(true);
+  const [notice, setNotice] = useState("");
+
+  useEffect(() => {
+    const storedSession = readPlatformSession();
+    if (!storedSession) {
+      router.replace("/auth/login");
+      return;
+    }
+
+    setSession(storedSession);
+  }, [router]);
+
+  useEffect(() => {
+    async function loadDetail() {
+      if (!session) {
+        return;
+      }
+
+      setLoading(true);
+      setNotice("");
+
+      try {
+        setDetail(await fetchPlatformTenantDetail(tenantId, session));
+      } catch (error) {
+        setNotice(error instanceof Error ? error.message : "Could not load tenant detail.");
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    void loadDetail();
+  }, [session, tenantId]);
+
+  if (loading) {
+    return <div className="panel">Loading tenant...</div>;
   }
 
-  const users = demoUsers.filter((user) => user.tenantId === tenantId);
-  const connectors = demoGlobalConnectors.filter((connector) => connector.tenantId === tenantId);
-  const audit = demoAuditEvents.filter((event) => event.tenantName === tenant.name);
+  if (!detail) {
+    return <div className="empty-state"><h3>Tenant not found</h3><p>This customer workspace is not available.</p></div>;
+  }
 
   return (
     <div className="stack">
       <div className="breadcrumb">
         <Link href={"/admin/tenants" as Route}>Tenants</Link>
         <span>/</span>
-        <span>{tenant.name}</span>
+        <span>{detail.tenant.name}</span>
       </div>
 
       <PageHeader
         eyebrow="Tenant Workspace"
-        title={tenant.name}
-        description={`Slug: ${tenant.slug} · Status: ${tenant.status} · Created: ${tenant.createdAt}`}
+        title={detail.tenant.name}
+        description={`Slug: ${detail.tenant.slug} · Status: ${detail.tenant.status} · Created: ${new Date(detail.tenant.createdAt).toLocaleDateString()}`}
       />
+
+      {notice ? <div className="notice">{notice}</div> : null}
 
       <div className="tabs">
         {tabs.map((tab) => (
@@ -50,14 +95,15 @@ export default function TenantDetailPage() {
       {activeTab === "Users" ? (
         <div className="data-table-wrapper">
           <table>
-            <thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Last active</th></tr></thead>
+            <thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Status</th><th>Last active</th></tr></thead>
             <tbody>
-              {users.map((user) => (
+              {detail.users.map((user) => (
                 <tr key={user.id}>
-                  <td>{user.name}</td>
+                  <td>{user.displayName}</td>
                   <td>{user.email}</td>
                   <td><span className="chip">{user.role}</span></td>
-                  <td>{user.lastActive}</td>
+                  <td>{user.status}</td>
+                  <td>{new Date(user.lastActiveAt).toLocaleString()}</td>
                 </tr>
               ))}
             </tbody>
@@ -67,50 +113,53 @@ export default function TenantDetailPage() {
 
       {activeTab === "Connectors" ? (
         <div className="connector-grid">
-          {connectors.map((connector, index) => (
-            <article key={`${connector.id}-${index}`} className="connector-card">
+          {detail.connectors.map((connector) => (
+            <article key={`${connector.provider}-${connector.userId}`} className="connector-card">
               <div className="connector-card-header">
                 <div>
-                  <h4>{connector.name}</h4>
-                  <span className="connector-meta">{connector.category}</span>
+                  <h4>{connector.provider}</h4>
+                  <span className="connector-meta">User {connector.userId}</span>
                 </div>
-                <span className={`status-pill ${connector.status.toLowerCase().replace(/\s+/g, "-")}`}>{connector.status}</span>
+                <span className={`status-pill ${connector.status.toLowerCase()}`}>{connector.status}</span>
               </div>
-              <div className="chip-row">
-                {connector.tools.map((tool) => <span key={tool} className="chip">{tool}</span>)}
-              </div>
+              <p className="connector-meta">Updated {new Date(connector.updatedAt).toLocaleString()}</p>
+              {connector.lastError ? <p className="danger-text">{connector.lastError}</p> : null}
             </article>
           ))}
-        </div>
-      ) : null}
 
-      {activeTab === "Policies" ? (
-        <div className="permission-list">
-          {demoPermissions.map((permission) => (
-            <article key={permission.tool} className="permission-item">
+          <article className="connector-card">
+            <div className="connector-card-header">
               <div>
-                <strong>{permission.tool}</strong>
-                <p>{permission.roles.join(", ")}</p>
+                <h4>Policy baseline</h4>
+                <span className="connector-meta">Server-enforced</span>
               </div>
-              <span className={`status-pill ${permission.enabled ? "connected" : "disconnected"}`}>
-                {permission.enabled ? "Enabled" : "Restricted"}
-              </span>
-            </article>
-          ))}
+            </div>
+            <div className="permission-list">
+              {baselinePolicies.map((policy) => (
+                <article key={policy.tool} className="permission-item">
+                  <div>
+                    <strong>{policy.tool}</strong>
+                    <p>{policy.scope} · {policy.roles}</p>
+                  </div>
+                  <span className="status-pill connected">Active</span>
+                </article>
+              ))}
+            </div>
+          </article>
         </div>
       ) : null}
 
       {activeTab === "Audit" ? (
         <div className="data-table-wrapper">
           <table>
-            <thead><tr><th>Time</th><th>Action</th><th>Actor</th><th>Detail</th></tr></thead>
+            <thead><tr><th>Time</th><th>Action</th><th>Target</th><th>Detail</th></tr></thead>
             <tbody>
-              {audit.map((event) => (
+              {detail.audit.map((event) => (
                 <tr key={event.id}>
-                  <td>{event.time}</td>
+                  <td>{new Date(event.createdAt).toLocaleString()}</td>
                   <td><span className="chip">{event.action}</span></td>
-                  <td>{event.actor}</td>
-                  <td>{event.detail}</td>
+                  <td>{event.targetType}{event.targetId ? ` · ${event.targetId}` : ""}</td>
+                  <td>{JSON.stringify(event.metadata)}</td>
                 </tr>
               ))}
             </tbody>
