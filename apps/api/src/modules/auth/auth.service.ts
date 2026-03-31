@@ -15,6 +15,8 @@ export interface PlatformSession {
     email: string;
     displayName: string;
     role: string;
+    tenantRole: string;
+    platformRole: string;
   };
   tenant: {
     id: string;
@@ -35,6 +37,8 @@ export interface PlatformAuthContext {
   email: string;
   displayName: string;
   role: string;
+  tenantRole: string;
+  platformRole: string;
   tokenType: "platform_session";
 }
 
@@ -69,6 +73,7 @@ type UserRow = {
   password_hash: string;
   display_name: string;
   role: string;
+  platform_role: string;
 };
 
 type AuthorizationCodeRow = {
@@ -138,7 +143,7 @@ function verifyPassword(password: string, storedHash: string) {
 export class AuthService {
   private readonly ready = ensureDatabaseSchema();
 
-  private issuePlatformToken(user: UserRow, tenantId = user.tenant_id, role = user.role) {
+  private issuePlatformToken(user: UserRow, tenantId = user.tenant_id, tenantRole = user.role) {
     return jwt.sign(
       {
         tokenType: "platform_session",
@@ -146,7 +151,9 @@ export class AuthService {
         tenantId,
         email: user.email,
         displayName: user.display_name,
-        role
+        role: tenantRole,
+        tenantRole,
+        platformRole: user.platform_role
       } satisfies PlatformAuthContext,
       config.sessionSecret,
       { expiresIn: "7d" }
@@ -193,16 +200,18 @@ export class AuthService {
     }));
   }
 
-  private async buildSession(user: UserRow, tenant: TenantRow, role = user.role): Promise<PlatformSession> {
+  private async buildSession(user: UserRow, tenant: TenantRow, tenantRole = user.role): Promise<PlatformSession> {
     const memberships = await this.loadMemberships(user.id);
     return {
-      token: this.issuePlatformToken(user, tenant.id, role),
+      token: this.issuePlatformToken(user, tenant.id, tenantRole),
       user: {
         id: user.id,
         tenantId: tenant.id,
         email: user.email,
         displayName: user.display_name,
-        role
+        role: tenantRole,
+        tenantRole,
+        platformRole: user.platform_role
       },
       tenant,
       tenants: memberships
@@ -236,10 +245,10 @@ export class AuthService {
 
       await client.query(
         `
-          INSERT INTO platform_users (id, tenant_id, email, password_hash, display_name, role, created_at, updated_at)
-          VALUES ($1, $2, $3, $4, $5, $6, NOW(), NOW())
+          INSERT INTO platform_users (id, tenant_id, email, password_hash, display_name, role, platform_role, created_at, updated_at)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), NOW())
         `,
-        [userId, tenantId, input.email.toLowerCase(), hashPassword(input.password), input.displayName, "OWNER"]
+        [userId, tenantId, input.email.toLowerCase(), hashPassword(input.password), input.displayName, "OWNER", "PLATFORM_MEMBER"]
       );
 
       await client.query(
@@ -260,7 +269,7 @@ export class AuthService {
 
     const tenant = await this.loadTenant(tenantId);
     const userResult = await pool.query<UserRow>(
-      `SELECT id, tenant_id, email, password_hash, display_name, role FROM platform_users WHERE id = $1 LIMIT 1`,
+      `SELECT id, tenant_id, email, password_hash, display_name, role, platform_role FROM platform_users WHERE id = $1 LIMIT 1`,
       [userId]
     );
 
@@ -271,7 +280,7 @@ export class AuthService {
     await this.ready;
 
     const userResult = await pool.query<UserRow>(
-      `SELECT id, tenant_id, email, password_hash, display_name, role FROM platform_users WHERE email = $1 LIMIT 1`,
+      `SELECT id, tenant_id, email, password_hash, display_name, role, platform_role FROM platform_users WHERE email = $1 LIMIT 1`,
       [email.toLowerCase()]
     );
     const user = userResult.rows[0];
@@ -294,7 +303,7 @@ export class AuthService {
     await this.ready;
 
     const userResult = await pool.query<UserRow>(
-      `SELECT id, tenant_id, email, password_hash, display_name, role FROM platform_users WHERE id = $1 LIMIT 1`,
+      `SELECT id, tenant_id, email, password_hash, display_name, role, platform_role FROM platform_users WHERE id = $1 LIMIT 1`,
       [auth.userId]
     );
     const user = userResult.rows[0];
@@ -403,7 +412,7 @@ export class AuthService {
     }
 
     const userResult = await pool.query<UserRow>(
-      `SELECT id, tenant_id, email, password_hash, display_name, role FROM platform_users WHERE id = $1 LIMIT 1`,
+      `SELECT id, tenant_id, email, password_hash, display_name, role, platform_role FROM platform_users WHERE id = $1 LIMIT 1`,
       [auth.userId]
     );
     const user = userResult.rows[0];
@@ -425,7 +434,7 @@ export class AuthService {
     }
 
     const userResult = await pool.query<UserRow>(
-      `SELECT id, tenant_id, email, password_hash, display_name, role FROM platform_users WHERE id = $1 LIMIT 1`,
+      `SELECT id, tenant_id, email, password_hash, display_name, role, platform_role FROM platform_users WHERE id = $1 LIMIT 1`,
       [auth.userId]
     );
     const user = userResult.rows[0];
@@ -656,7 +665,7 @@ export class AuthService {
     }
 
     const userResult = await pool.query<UserRow>(
-      `SELECT id, tenant_id, email, password_hash, display_name, role FROM platform_users WHERE id = $1 LIMIT 1`,
+      `SELECT id, tenant_id, email, password_hash, display_name, role, platform_role FROM platform_users WHERE id = $1 LIMIT 1`,
       [record.user_id]
     );
     const user = userResult.rows[0];

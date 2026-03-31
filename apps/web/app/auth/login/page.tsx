@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { useMemo, useState } from "react";
 
 import { NexianLogo } from "../../../components/nexian-logo";
-import { writePlatformSession } from "../../../lib/platform-auth";
+import { hasPlatformConsoleAccess, writePlatformSession } from "../../../lib/platform-auth";
 
 type Mode = "login" | "register";
 
@@ -48,7 +48,7 @@ export default function LoginPage() {
       }
 
       writePlatformSession(payload as never);
-      router.push((payload.tenant?.slug?.includes("nexian") ? "/admin/dashboard" : "/dashboard") as Route);
+      router.push((hasPlatformConsoleAccess(payload as never) ? "/admin/dashboard" : "/dashboard") as Route);
     } catch (error) {
       setNotice(error instanceof Error ? error.message : "Could not authenticate.");
     } finally {

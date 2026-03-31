@@ -5,7 +5,7 @@ import type { Route } from "next";
 import { useRouter } from "next/navigation";
 
 import { Sidebar } from "../../../components/sidebar";
-import { readPlatformSession } from "../../../lib/platform-auth";
+import { hasPlatformConsoleAccess, readPlatformSession } from "../../../lib/platform-auth";
 
 export default function AdminLayout({ children }: { children: ReactNode }) {
   const router = useRouter();
@@ -17,7 +17,7 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
       return;
     }
 
-    if (!session.tenant.slug.includes("nexian")) {
+    if (!hasPlatformConsoleAccess(session)) {
       router.replace("/dashboard" as Route);
     }
   }, [router]);

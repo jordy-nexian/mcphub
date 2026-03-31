@@ -1,25 +1,57 @@
 import { PageHeader } from "../../../../components/page-header";
 
+const settingsGroups = [
+  {
+    title: "Platform",
+    rows: [
+      ["MCP endpoint base", "Configured from deployment"],
+      ["Environment", "Production-ready runtime"],
+      ["Tenant model", "Separate MSP and tenant roles"]
+    ]
+  },
+  {
+    title: "Security",
+    rows: [
+      ["Session timeout", "7 days"],
+      ["Access token expiry", "1 hour"],
+      ["Connector tokens", "Encrypted at rest"]
+    ]
+  },
+  {
+    title: "Operations",
+    rows: [
+      ["Connector ownership", "User-scoped inside tenant"],
+      ["Admin surfaces", "Platform roles only"],
+      ["Workflow visibility", "n8n API-backed"]
+    ]
+  }
+] as const;
+
 export default function AdminSettingsPage() {
   return (
     <div className="stack">
       <PageHeader
-        eyebrow="Platform Settings"
-        title="Commercial and technical defaults"
-        description="Baseline settings for how Nexian packages and operates the platform."
+        eyebrow="Admin"
+        title="Admin settings"
+        description="Commercial, security, and operational defaults for how Nexian runs the platform."
       />
 
+      <div className="tabs">
+        <span className="tab active">Admin</span>
+      </div>
+
       <div className="grid two">
-        <section className="settings-section">
-          <div className="settings-section-header">Platform</div>
-          <div className="settings-row"><span>MCP endpoint base</span><code>localhost:4100</code></div>
-          <div className="settings-row"><span>Environment</span><span className="chip">Development</span></div>
-        </section>
-        <section className="settings-section">
-          <div className="settings-section-header">Security</div>
-          <div className="settings-row"><span>Session timeout</span><span>7 days</span></div>
-          <div className="settings-row"><span>Token expiry</span><span>1 hour</span></div>
-        </section>
+        {settingsGroups.map((group) => (
+          <section key={group.title} className="settings-section">
+            <div className="settings-section-header">{group.title}</div>
+            {group.rows.map(([label, value]) => (
+              <div key={label} className="settings-row">
+                <span>{label}</span>
+                <span>{value}</span>
+              </div>
+            ))}
+          </section>
+        ))}
       </div>
     </div>
   );

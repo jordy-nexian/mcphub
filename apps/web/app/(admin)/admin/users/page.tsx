@@ -14,6 +14,7 @@ type UserRecord = {
   email: string;
   displayName: string;
   role: string;
+  platformRole: string;
   status: string;
   lastActiveAt: string;
 };
@@ -39,6 +40,7 @@ export default function AdminUsersPage() {
   const [displayName, setDisplayName] = useState("");
   const [tenantId, setTenantId] = useState("");
   const [role, setRole] = useState("USER");
+  const [platformRole, setPlatformRole] = useState("PLATFORM_MEMBER");
   const [temporaryPassword, setTemporaryPassword] = useState("");
 
   const apiOrigin = useMemo(
@@ -119,6 +121,7 @@ export default function AdminUsersPage() {
           email,
           displayName,
           role,
+          platformRole,
           temporaryPassword: temporaryPassword || undefined
         })
       });
@@ -139,6 +142,7 @@ export default function AdminUsersPage() {
       setDisplayName("");
       setTemporaryPassword("");
       setRole("USER");
+      setPlatformRole("PLATFORM_MEMBER");
       setNotice(
         createdUser.temporaryPassword
           ? `Created ${createdUser.displayName}. Temporary password: ${createdUser.temporaryPassword}`
@@ -196,6 +200,15 @@ export default function AdminUsersPage() {
             </select>
           </label>
           <label className="stack">
+            <span className="field-label">Platform role</span>
+            <select value={platformRole} onChange={(event) => setPlatformRole(event.target.value)}>
+              <option value="PLATFORM_MEMBER">PLATFORM_MEMBER</option>
+              <option value="PLATFORM_OPERATOR">PLATFORM_OPERATOR</option>
+              <option value="PLATFORM_ADMIN">PLATFORM_ADMIN</option>
+              <option value="PLATFORM_OWNER">PLATFORM_OWNER</option>
+            </select>
+          </label>
+          <label className="stack">
             <span className="field-label">Temporary password</span>
             <input
               value={temporaryPassword}
@@ -226,6 +239,7 @@ export default function AdminUsersPage() {
                 <th>Email</th>
                 <th>Tenant</th>
                 <th>Role</th>
+                <th>Platform</th>
                 <th>Status</th>
                 <th>Last active</th>
               </tr>
@@ -237,6 +251,7 @@ export default function AdminUsersPage() {
                   <td>{user.email}</td>
                   <td>{user.tenantName}</td>
                   <td><span className="chip">{user.role}</span></td>
+                  <td><span className="chip">{user.platformRole}</span></td>
                   <td>{user.status}</td>
                   <td>{new Date(user.lastActiveAt).toLocaleString()}</td>
                 </tr>

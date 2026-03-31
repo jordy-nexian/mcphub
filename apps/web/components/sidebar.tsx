@@ -5,23 +5,54 @@ import type { Route } from "next";
 import { usePathname } from "next/navigation";
 
 import { NexianLogo } from "./nexian-logo";
-import { clearPlatformSession, readPlatformSession } from "../lib/platform-auth";
+import { clearPlatformSession, hasPlatformConsoleAccess, readPlatformSession } from "../lib/platform-auth";
 
 const adminNav = [
-  { href: "/admin/dashboard", label: "Overview", caption: "Platform health" },
-  { href: "/admin/tenants", label: "Tenants", caption: "Customer estates" },
-  { href: "/admin/connectors", label: "Connectors", caption: "Provider health" },
-  { href: "/admin/audit", label: "Audit", caption: "Cross-tenant activity" },
-  { href: "/admin/users", label: "Users", caption: "Platform access" },
-  { href: "/admin/settings", label: "Settings", caption: "Commercial setup" }
+  {
+    section: "Core",
+    items: [
+      { href: "/admin/dashboard", label: "Overview", caption: "Platform health" },
+      { href: "/admin/tenants", label: "Tenants", caption: "Customer estates" },
+      { href: "/admin/users", label: "Users", caption: "Platform access" }
+    ]
+  },
+  {
+    section: "Operations",
+    items: [
+      { href: "/admin/connectors", label: "Connectors", caption: "Provider health" },
+      { href: "/admin/audit", label: "Audit", caption: "Cross-tenant activity" }
+    ]
+  },
+  {
+    section: "Admin",
+    items: [
+      { href: "/admin/settings", label: "Settings", caption: "Commercial and security defaults" }
+    ]
+  }
 ] as const;
 
 const tenantNav = [
-  { href: "/dashboard", label: "Overview", caption: "Workspace health" },
-  { href: "/dashboard/connectors", label: "Connectors", caption: "Linked products" },
-  { href: "/dashboard/permissions", label: "Permissions", caption: "Tool guardrails" },
-  { href: "/dashboard/audit", label: "Audit", caption: "Operational trail" },
-  { href: "/dashboard/mcp", label: "MCP Access", caption: "Endpoint and tokens" }
+  {
+    section: "Workspace",
+    items: [
+      { href: "/dashboard", label: "Overview", caption: "Workspace health" },
+      { href: "/dashboard/connectors", label: "Connectors", caption: "Linked products" }
+    ]
+  },
+  {
+    section: "Automation",
+    items: [
+      { href: "/dashboard/workflows", label: "n8n Workflows", caption: "Workflow and execution API" },
+      { href: "/dashboard/mcp", label: "MCP Access", caption: "Endpoint and tokens" }
+    ]
+  },
+  {
+    section: "Governance",
+    items: [
+      { href: "/dashboard/permissions", label: "Permissions", caption: "Tool guardrails" },
+      { href: "/dashboard/audit", label: "Audit", caption: "Operational trail" }
+    ]
+  }
 ] as const;
 
 function getInitials(name: string) {
@@ -36,8 +67,12 @@ function getInitials(name: string) {
 export function Sidebar({ variant }: { variant: "admin" | "tenant" }) {
   const pathname = usePathname();
   const session = readPlatformSession();
-  const nav = variant === "admin" ? adminNav : tenantNav;
+  const navGroups = variant === "admin" ? adminNav : tenantNav;
   const displayName = session?.user.displayName ?? "Guest";
+  const roleLabel =
+    variant === "admin"
+      ? session?.user.platformRole ?? "No platform role"
+      : session?.user.tenantRole ?? session?.user.role ?? "No tenant role";
 
   return (
     <aside className="sidebar">
@@ -63,15 +98,20 @@ export function Sidebar({ variant }: { variant: "admin" | "tenant" }) {
         </div>
 
         <nav className="sidebar-nav">
-          {nav.map((item) => {
-            const active = pathname === item.href || pathname.startsWith(`${item.href}/`);
-            return (
-              <Link key={item.href} href={item.href as Route} className={`sidebar-link ${active ? "active" : ""}`}>
-                <span className="sidebar-link-label">{item.label}</span>
-                <span className="sidebar-link-caption">{item.caption}</span>
-              </Link>
-            );
-          })}
+          {navGroups.map((group) => (
+            <div key={group.section} className="sidebar-group">
+              <span className="sidebar-group-title">{group.section}</span>
+              {group.items.map((item) => {
+                const active = pathname === item.href || pathname.startsWith(`${item.href}/`);
+                return (
+                  <Link key={item.href} href={item.href as Route} className={`sidebar-link ${active ? "active" : ""}`}>
+                    <span className="sidebar-link-label">{item.label}</span>
+                    <span className="sidebar-link-caption">{item.caption}</span>
+                  </Link>
+                );
+              })}
+            </div>
+          ))}
         </nav>
       </div>
 
@@ -80,6 +120,7 @@ export function Sidebar({ variant }: { variant: "admin" | "tenant" }) {
         <div className="sidebar-user-copy">
           <strong>{displayName}</strong>
           <span>{session?.user.email ?? "No active session"}</span>
+          <span>{variant === "admin" && !hasPlatformConsoleAccess(session) ? "Tenant-only access" : roleLabel}</span>
         </div>
         <button
           className="button secondary sidebar-signout"

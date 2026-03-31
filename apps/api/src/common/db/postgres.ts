@@ -63,6 +63,18 @@ export async function ensureDatabaseSchema() {
 
       await addColumnIfMissing("platform_users", "status", "TEXT NOT NULL DEFAULT 'ACTIVE'");
       await addColumnIfMissing("platform_users", "last_active_at", "TIMESTAMPTZ NULL");
+      await addColumnIfMissing("platform_users", "platform_role", "TEXT NOT NULL DEFAULT 'PLATFORM_MEMBER'");
+
+      await pool.query(`
+        UPDATE platform_users pu
+        SET platform_role = CASE
+          WHEN t.tenant_type = 'MSP' THEN 'PLATFORM_OWNER'
+          ELSE 'PLATFORM_MEMBER'
+        END
+        FROM tenants t
+        WHERE pu.tenant_id = t.id
+          AND (pu.platform_role IS NULL OR pu.platform_role = '' OR pu.platform_role = 'OWNER' OR pu.platform_role = 'ADMIN' OR pu.platform_role = 'ANALYST' OR pu.platform_role = 'USER');
+      `);
 
   await pool.query(`
     CREATE INDEX IF NOT EXISTS platform_users_tenant_idx

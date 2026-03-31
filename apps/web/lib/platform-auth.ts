@@ -8,6 +8,8 @@ export interface PlatformSession {
     email: string;
     displayName: string;
     role: string;
+    tenantRole: string;
+    platformRole: string;
   };
   tenant: {
     id: string;
@@ -20,6 +22,14 @@ export interface PlatformSession {
     name: string;
     role: string;
   }>;
+}
+
+export function hasPlatformConsoleAccess(session: PlatformSession | null) {
+  if (!session) {
+    return false;
+  }
+
+  return ["PLATFORM_OWNER", "PLATFORM_ADMIN", "PLATFORM_OPERATOR"].includes(session.user.platformRole);
 }
 
 const sessionStorageKey = "nexian-platform-session";

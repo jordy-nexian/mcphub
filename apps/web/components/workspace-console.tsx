@@ -3,7 +3,7 @@
 import { useRouter } from "next/navigation";
 import { startTransition, useEffect, useMemo, useState } from "react";
 
-import { clearPlatformSession, readPlatformSession, writePlatformSession, type PlatformSession } from "../lib/platform-auth";
+import { clearPlatformSession, hasPlatformConsoleAccess, readPlatformSession, writePlatformSession, type PlatformSession } from "../lib/platform-auth";
 
 type Connector = {
   id: string;
@@ -696,6 +696,7 @@ export function WorkspaceConsole() {
   }
 
   const selected = state.connectors.find((connector) => connector.id === selectedConnector) ?? state.connectors[0];
+  const canManageTenants = hasPlatformConsoleAccess(session);
   const selectedConfig = connectorConfigs[selected.id] ?? {
     apiUrl: "",
     clientId: "",
@@ -766,22 +767,32 @@ export function WorkspaceConsole() {
                 ))}
               </div>
             </div>
-            <label className="stack">
-              <span className="field-label">Create tenant</span>
-              <input
-                value={newTenantName}
-                onChange={(event) => setNewTenantName(event.target.value)}
-                placeholder="Add a new customer workspace"
-              />
-            </label>
-            <div className="row">
-              <button className="button primary" onClick={() => void createTenant()} type="button" disabled={creatingTenant}>
-                {creatingTenant ? "Creating..." : "Create tenant"}
-              </button>
-              <button className="button secondary" onClick={signOut} type="button">
-                Sign out
-              </button>
-            </div>
+            {canManageTenants ? (
+              <>
+                <label className="stack">
+                  <span className="field-label">Create tenant</span>
+                  <input
+                    value={newTenantName}
+                    onChange={(event) => setNewTenantName(event.target.value)}
+                    placeholder="Add a new customer workspace"
+                  />
+                </label>
+                <div className="row">
+                  <button className="button primary" onClick={() => void createTenant()} type="button" disabled={creatingTenant}>
+                    {creatingTenant ? "Creating..." : "Create tenant"}
+                  </button>
+                  <button className="button secondary" onClick={signOut} type="button">
+                    Sign out
+                  </button>
+                </div>
+              </>
+            ) : (
+              <div className="row">
+                <button className="button secondary" onClick={signOut} type="button">
+                  Sign out
+                </button>
+              </div>
+            )}
           </div>
         </aside>
       </section>

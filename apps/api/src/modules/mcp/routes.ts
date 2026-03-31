@@ -89,11 +89,16 @@ const connectorConfigSchema = z.object({
   tenantId: z.string().optional()
 });
 
+const n8nExecutionsQuerySchema = z.object({
+  workflowId: z.string().optional()
+});
+
 const createPlatformUserSchema = z.object({
   tenantId: z.string().min(1),
   email: z.string().email(),
   displayName: z.string().min(1),
   role: z.enum(["OWNER", "ADMIN", "ANALYST", "USER"]),
+  platformRole: z.enum(["PLATFORM_OWNER", "PLATFORM_ADMIN", "PLATFORM_OPERATOR", "PLATFORM_MEMBER"]).optional(),
   temporaryPassword: z.string().min(8).optional()
 });
 
@@ -134,6 +139,10 @@ function parsePlatformAuth(
 
 function parseProviderParam(request: { params: unknown }) {
   return (request.params as { provider: ProviderName }).provider;
+}
+
+function hasPlatformConsoleAccess(auth: PlatformAuthContext) {
+  return ["PLATFORM_OWNER", "PLATFORM_ADMIN", "PLATFORM_OPERATOR"].includes(auth.platformRole);
 }
 
 function parseCookies(cookieHeader: string | undefined) {
@@ -332,6 +341,9 @@ export function registerApiRoutes(
     const auth = parsePlatformAuthFromRequest(request, deps.authService);
     if (!auth) {
       return reply.status(401).send({ error: "unauthorized" });
+    }
+    if (!hasPlatformConsoleAccess(auth)) {
+      return reply.status(403).send({ error: "forbidden" });
     }
 
     const body = createTenantSchema.parse(request.body);
@@ -658,6 +670,29 @@ export function registerApiRoutes(
     return deps.connectorService.saveConnectorConfig(auth.tenantId, auth.userId, provider, body);
   });
 
+  app.get("/connectors/n8n/workflows", async (request, reply) => {
+    const auth = parsePlatformAuth(request.headers.authorization, deps.authService);
+    if (!auth) {
+      return reply.status(401).send({ error: "unauthorized" });
+    }
+
+    return {
+      workflows: await deps.connectorService.listN8nWorkflows(auth.tenantId)
+    };
+  });
+
+  app.get("/connectors/n8n/executions", async (request, reply) => {
+    const auth = parsePlatformAuth(request.headers.authorization, deps.authService);
+    if (!auth) {
+      return reply.status(401).send({ error: "unauthorized" });
+    }
+
+    const query = n8nExecutionsQuerySchema.parse(request.query ?? {});
+    return {
+      executions: await deps.connectorService.listN8nExecutions(auth.tenantId, query.workflowId)
+    };
+  });
+
   app.post("/auth/mcp-token", async (request, reply) => {
     const auth = parsePlatformAuth(request.headers.authorization, deps.authService);
     if (!auth) {
@@ -694,13 +729,41 @@ export function registerApiRoutes(
     return { result };
   });
 
-  app.get("/platform/overview", async () => deps.platformService.getOverview());
+  app.get("/platform/overview", async (request, reply) => {
+    const auth = parsePlatformAuthFromRequest(request, deps.authService);
+    if (!auth) {
+      return reply.status(401).send({ error: "unauthorized" });
+    }
+    if (!hasPlatformConsoleAccess(auth)) {
+      return reply.status(403).send({ error: "forbidden" });
+    }
 
-  app.get("/platform/tenants", async () => ({
-    tenants: await deps.platformService.listTenants()
-  }));
+    return deps.platformService.getOverview();
+  });
+
+  app.get("/platform/tenants", async (request, reply) => {
+    const auth = parsePlatformAuthFromRequest(request, deps.authService);
+    if (!auth) {
+      return reply.status(401).send({ error: "unauthorized" });
+    }
+    if (!hasPlatformConsoleAccess(auth)) {
+      return reply.status(403).send({ error: "forbidden" });
+    }
+
+    return {
+      tenants: await deps.platformService.listTenants()
+    };
+  });
 
   app.get("/platform/tenants/:tenantId", async (request, reply) => {
+    const auth = parsePlatformAuthFromRequest(request, deps.authService);
+    if (!auth) {
+      return reply.status(401).send({ error: "unauthorized" });
+    }
+    if (!hasPlatformConsoleAccess(auth)) {
+      return reply.status(403).send({ error: "forbidden" });
+    }
+
     const { tenantId } = request.params as { tenantId: string };
     const detail = await deps.platformService.getTenantDetail(tenantId);
 
@@ -711,25 +774,56 @@ export function registerApiRoutes(
     return detail;
   });
 
-  app.get("/platform/users", async () => ({
-    users: await deps.platformService.listUsers()
-  }));
+  app.get("/platform/users", async (request, reply) => {
+    const auth = parsePlatformAuthFromRequest(request, deps.authService);
+    if (!auth) {
+      return reply.status(401).send({ error: "unauthorized" });
+    }
+    if (!hasPlatformConsoleAccess(auth)) {
+      return reply.status(403).send({ error: "forbidden" });
+    }
+
+    return {
+      users: await deps.platformService.listUsers()
+    };
+  });
 
   app.post("/platform/users", async (request, reply) => {
     const auth = parsePlatformAuthFromRequest(request, deps.authService);
     if (!auth) {
       return reply.status(401).send({ error: "unauthorized" });
     }
+    if (!hasPlatformConsoleAccess(auth)) {
+      return reply.status(403).send({ error: "forbidden" });
+    }
 
     const body = createPlatformUserSchema.parse(request.body);
     return deps.platformService.createUser(body);
   });
 
-  app.get("/platform/connectors", async () => ({
-    connectors: await deps.platformService.getConnectorSummary()
-  }));
+  app.get("/platform/connectors", async (request, reply) => {
+    const auth = parsePlatformAuthFromRequest(request, deps.authService);
+    if (!auth) {
+      return reply.status(401).send({ error: "unauthorized" });
+    }
+    if (!hasPlatformConsoleAccess(auth)) {
+      return reply.status(403).send({ error: "forbidden" });
+    }
 
-  app.get("/platform/audit", async (request) => {
+    return {
+      connectors: await deps.platformService.getConnectorSummary()
+    };
+  });
+
+  app.get("/platform/audit", async (request, reply) => {
+    const auth = parsePlatformAuthFromRequest(request, deps.authService);
+    if (!auth) {
+      return reply.status(401).send({ error: "unauthorized" });
+    }
+    if (!hasPlatformConsoleAccess(auth)) {
+      return reply.status(403).send({ error: "forbidden" });
+    }
+
     const query = z
       .object({
         tenantId: z.string().optional(),

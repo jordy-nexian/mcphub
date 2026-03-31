@@ -48,6 +48,7 @@ export type PlatformUser = {
   email: string;
   displayName: string;
   role: string;
+  platformRole: string;
   status: string;
   lastActiveAt: string;
 };
@@ -103,6 +104,23 @@ export type ProviderResponse = {
   status: string;
   connected: boolean;
   lastError?: string;
+};
+
+export type N8nWorkflow = {
+  id: string;
+  name: string;
+  active: boolean;
+  updatedAt: string;
+  tags: string[];
+};
+
+export type N8nExecution = {
+  id: string;
+  workflowId: string;
+  status: string;
+  mode: string;
+  startedAt: string;
+  stoppedAt?: string;
 };
 
 function getApiOrigin() {
@@ -182,4 +200,18 @@ export async function fetchAuditEvents(options?: { tenantId?: string; limit?: nu
 
 export async function fetchProviders(session?: PlatformSession | null) {
   return authedFetch<{ providers: ProviderResponse[] }>("/providers", session);
+}
+
+export async function fetchN8nWorkflows(session?: PlatformSession | null) {
+  return authedFetch<{ workflows: N8nWorkflow[] }>("/connectors/n8n/workflows", session);
+}
+
+export async function fetchN8nExecutions(workflowId?: string, session?: PlatformSession | null) {
+  const query = new URLSearchParams();
+  if (workflowId) {
+    query.set("workflowId", workflowId);
+  }
+
+  const suffix = query.toString() ? `?${query.toString()}` : "";
+  return authedFetch<{ executions: N8nExecution[] }>(`/connectors/n8n/executions${suffix}`, session);
 }

@@ -30,6 +30,7 @@ type UserRow = {
   email: string;
   display_name: string;
   role: string;
+  platform_role?: string;
   status: string;
   last_active_at: Date | null;
   tenant_name?: string;
@@ -217,6 +218,7 @@ export class PlatformService {
           pu.email,
           pu.display_name,
           pu.role,
+          pu.platform_role,
           pu.status,
           pu.last_active_at,
           t.name AS tenant_name,
@@ -235,6 +237,7 @@ export class PlatformService {
       email: row.email,
       displayName: row.display_name,
       role: row.role,
+      platformRole: row.platform_role ?? "PLATFORM_MEMBER",
       status: row.status,
       lastActiveAt: row.last_active_at?.toISOString() ?? new Date().toISOString()
     }));
@@ -245,6 +248,7 @@ export class PlatformService {
     email: string;
     displayName: string;
     role: string;
+    platformRole?: string;
     temporaryPassword?: string;
   }) {
     await this.ensureSeedData();
@@ -286,12 +290,12 @@ export class PlatformService {
       await client.query(
         `
           INSERT INTO platform_users (
-            id, tenant_id, email, password_hash, display_name, role, status, last_active_at, created_at, updated_at
+            id, tenant_id, email, password_hash, display_name, role, platform_role, status, last_active_at, created_at, updated_at
           ) VALUES (
-            $1, $2, $3, $4, $5, $6, 'ACTIVE', NOW(), NOW(), NOW()
+            $1, $2, $3, $4, $5, $6, $7, 'ACTIVE', NOW(), NOW(), NOW()
           )
         `,
-        [userId, tenant.id, email, hashPassword(temporaryPassword), displayName, role]
+        [userId, tenant.id, email, hashPassword(temporaryPassword), displayName, role, input.platformRole ?? "PLATFORM_MEMBER"]
       );
 
       await client.query(
@@ -328,6 +332,7 @@ export class PlatformService {
       email,
       displayName,
       role,
+      platformRole: input.platformRole ?? "PLATFORM_MEMBER",
       status: "ACTIVE",
       lastActiveAt: new Date().toISOString(),
       temporaryPassword

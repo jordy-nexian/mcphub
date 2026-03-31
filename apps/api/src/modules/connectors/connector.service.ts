@@ -32,6 +32,9 @@ type StoredConnectorConfig = {
   webhookBaseUrl?: string;
 };
 
+type N8nWorkflowRecord = Record<string, unknown>;
+type N8nExecutionRecord = Record<string, unknown>;
+
 function pickString(record: Record<string, unknown>, keys: string[]) {
   for (const key of keys) {
     const value = record[key];
@@ -411,6 +414,91 @@ export class ConnectorService {
     });
 
     return this.getConnectorConfig(tenantId, provider);
+  }
+
+  async listN8nWorkflows(tenantId: string) {
+    const n8nConfig = await this.resolveN8nConfig(tenantId);
+    const response = await fetch(`${n8nConfig.apiUrl}/workflows`, {
+      headers: {
+        accept: "application/json",
+        "X-N8N-API-KEY": n8nConfig.apiKey
+      }
+    });
+
+    if (!response.ok) {
+      const body = await response.text();
+      throw new Error(`n8n workflows request failed (${response.status}): ${body}`);
+    }
+
+    const payload = (await response.json()) as { data?: N8nWorkflowRecord[] } | N8nWorkflowRecord[];
+    const records = Array.isArray(payload) ? payload : Array.isArray(payload.data) ? payload.data : [];
+
+    return records.map((workflow) => ({
+      id: String(pickString(workflow, ["id"]) ?? pickNumber(workflow, ["id"]) ?? ""),
+      name: pickString(workflow, ["name"]) ?? "Untitled workflow",
+      active: Boolean(workflow.active),
+      updatedAt:
+        pickString(workflow, ["updatedAt", "updated_at"]) ??
+        pickString(workflow, ["createdAt", "created_at"]) ??
+        new Date().toISOString(),
+      tags: Array.isArray(workflow.tags)
+        ? workflow.tags
+            .map((tag) => {
+              if (typeof tag === "string") {
+                return tag;
+              }
+
+              if (tag && typeof tag === "object") {
+                return pickString(tag as Record<string, unknown>, ["name"]);
+              }
+
+              return undefined;
+            })
+            .filter(Boolean)
+        : []
+    }));
+  }
+
+  async listN8nExecutions(tenantId: string, workflowId?: string) {
+    const n8nConfig = await this.resolveN8nConfig(tenantId);
+    const url = new URL(`${n8nConfig.apiUrl}/executions`);
+    url.searchParams.set("limit", "25");
+    if (workflowId) {
+      url.searchParams.set("workflowId", workflowId);
+    }
+
+    const response = await fetch(url, {
+      headers: {
+        accept: "application/json",
+        "X-N8N-API-KEY": n8nConfig.apiKey
+      }
+    });
+
+    if (!response.ok) {
+      const body = await response.text();
+      throw new Error(`n8n executions request failed (${response.status}): ${body}`);
+    }
+
+    const payload = (await response.json()) as { data?: N8nExecutionRecord[] } | N8nExecutionRecord[];
+    const records = Array.isArray(payload) ? payload : Array.isArray(payload.data) ? payload.data : [];
+
+    return records.map((execution) => ({
+      id: String(pickString(execution, ["id"]) ?? pickNumber(execution, ["id"]) ?? ""),
+      workflowId: String(
+        pickString(execution, ["workflowId", "workflow_id"]) ??
+          pickNumber(execution, ["workflowId", "workflow_id"]) ??
+          ""
+      ),
+      status:
+        pickString(execution, ["status", "finished"]) ??
+        (execution.finished === true ? "success" : execution.finished === false ? "running" : "unknown"),
+      mode: pickString(execution, ["mode"]) ?? "manual",
+      startedAt:
+        pickString(execution, ["startedAt", "started_at"]) ??
+        pickString(execution, ["createdAt", "created_at"]) ??
+        new Date().toISOString(),
+      stoppedAt: pickString(execution, ["stoppedAt", "stopped_at"]) ?? undefined
+    }));
   }
 
   async ensureFreshAccount(account: ConnectedAccountRecord) {
@@ -1277,6 +1365,21 @@ export class ConnectorService {
     }
 
     return { apiUrl, clientId, clientSecret, redirectUri, scopes };
+  }
+
+  private async resolveN8nConfig(tenantId: string) {
+    const stored = ((await this.configStore.get(tenantId, "n8n"))?.configJson ?? {}) as StoredConnectorConfig;
+    const apiUrl = this.normalizeApiUrl(stored.apiUrl);
+    const apiKey = stored.clientSecretEncrypted ? this.encryption.decrypt(stored.clientSecretEncrypted) : undefined;
+
+    if (!apiUrl || !apiKey) {
+      throw new Error("n8n requires API URL and bearer token/API key in connector settings");
+    }
+
+    return {
+      apiUrl: apiUrl.replace(/\/$/, ""),
+      apiKey
+    };
   }
 
   private async exchangeHaloToken(
