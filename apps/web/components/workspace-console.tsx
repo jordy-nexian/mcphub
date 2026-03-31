@@ -719,220 +719,42 @@ export function WorkspaceConsole({
     hasClientSecret: false
   };
 
-  return (
-    <div className="console stack">
-      <section className="hero hero-console">
-        <div className="hero-copy stack">
-          <span className="eyebrow">Nexian AI & Automation Control Centre</span>
-          <h1 className="hero-title">Connect your MSP stack, control safe tools, and hand clients a single MCP endpoint.</h1>
-          <p className="muted hero-text">
-            HaloPSA now uses the real authorization-code route and exposes the expanded Nexian MCP surface for tickets,
-            actions, projects, contacts, knowledge, assets, invoices, and guarded writes. The other connectors remain
-            scaffolded until we wire their provider-specific token exchange and storage paths. n8n is included for
-            workflow boxes, execution history, and webhook-triggered automation runs.
-          </p>
-          <div className="stats-grid">
-            <div className="stat-card">
-              <strong>{connectedCount}</strong>
-              <span>Connected services</span>
-            </div>
-            <div className="stat-card">
-              <strong>{state.permissions.filter((item) => item.enabled).length}</strong>
-              <span>Enabled tools</span>
-            </div>
-            <div className="stat-card">
-              <strong>{session?.tenants.length ?? 1}</strong>
-              <span>Accessible tenants</span>
-            </div>
-          </div>
-          {notice ? <div className="notice">{notice}</div> : null}
-        </div>
-        <aside className="hero-side stack">
-          <div className="panel panel-dark stack">
-            <span className="eyebrow">Workspace</span>
-            <strong className="workspace-name">{state.workspaceName}</strong>
-            <label className="stack">
-              <span className="field-label">Tenant slug</span>
-              <input value={state.workspaceSlug} readOnly />
-            </label>
-            <label className="stack">
-              <span className="field-label">Tenant ID</span>
-              <input value={state.tenantId} readOnly />
-            </label>
-            <label className="stack">
-              <span className="field-label">User ID</span>
-              <input value={state.userId} readOnly />
-            </label>
-            <div className="stack">
-              <span className="field-label">Active tenants</span>
-              <div className="chip-row">
-                {(session?.tenants ?? []).map((tenant) => (
-                  <button
-                    key={tenant.id}
-                    className={`chip tenant-chip ${tenant.id === state.tenantId ? "active" : ""}`}
-                    onClick={() => void switchTenant(tenant.id)}
-                    type="button"
-                    disabled={switchingTenant}
-                  >
-                    {tenant.name} · {tenant.role}
-                  </button>
-                ))}
-              </div>
-            </div>
-            {canManageTenants ? (
-              <>
-                <label className="stack">
-                  <span className="field-label">Create tenant</span>
-                  <input
-                    value={newTenantName}
-                    onChange={(event) => setNewTenantName(event.target.value)}
-                    placeholder="Add a new customer workspace"
-                  />
-                </label>
-                <div className="row">
-                  <button className="button primary" onClick={() => void createTenant()} type="button" disabled={creatingTenant}>
-                    {creatingTenant ? "Creating..." : "Create tenant"}
-                  </button>
-                  <button className="button secondary" onClick={signOut} type="button">
-                    Sign out
-                  </button>
-                </div>
-              </>
-            ) : (
-              <div className="row">
-                <button className="button secondary" onClick={signOut} type="button">
-                  Sign out
-                </button>
-              </div>
-            )}
-          </div>
-        </aside>
-      </section>
-
-      <section className={mode === "detail" ? "stack connector-stack" : "dashboard-grid"}>
-        <article className="panel stack">
-          <div className="section-heading">
-            <div>
-              <span className="eyebrow">Connectors</span>
-              <h2>Service connections</h2>
-            </div>
-            <span className="badge">{connectedCount} live</span>
-          </div>
-          <div className="connector-grid">
-            {state.connectors.map((connector) => (
-              <div
-                key={connector.id}
-                className={`connector-card connector-card-${connector.accent} ${selectedConnector === connector.id ? "selected" : ""}`}
-                onClick={() => {
-                  setSelectedConnector(connector.id);
-                  if (mode === "catalog") {
-                    router.push(`/dashboard/connectors/${connector.id}`);
-                  }
-                }}
-                role="button"
-                tabIndex={0}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter" || event.key === " ") {
-                    event.preventDefault();
-                    setSelectedConnector(connector.id);
-                    if (mode === "catalog") {
-                      router.push(`/dashboard/connectors/${connector.id}`);
-                    }
-                  }
-                }}
-              >
-                <div className="row row-spread">
-                  <div>
-                    <div className="connector-brand-row">
-                      <span className={`connector-logo connector-logo-${connector.accent}`}>
-                        <img src={connector.logoUrl} alt={`${connector.name} logo`} className="connector-logo-image" />
-                      </span>
-                      <div>
-                        <strong>{connector.name}</strong>
-                        <p className="muted connector-meta">
-                          {connector.category} · {connector.auth}
-                        </p>
-                      </div>
-                    </div>
-                  </div>
-                  <span className={`status-pill ${connector.status.toLowerCase().replace(/\s+/g, "-")}`}>{connector.status}</span>
-                </div>
-                <p className="muted">{connector.description}</p>
-                <p className="connector-meta">Last activity: {connector.lastSync}</p>
-                {connector.lastError ? <p className="danger-text">{connector.lastError}</p> : null}
-                <div className="chip-row">
-                  {connector.tools.slice(0, connector.id === "halopsa" ? 6 : 3).map((tool) => (
-                    <span key={tool} className="chip">
-                      {tool}
-                    </span>
-                  ))}
-                </div>
-                <p className="connector-meta">{connector.tools.length} MCP tools available</p>
-                <div className="row">
-                  <button
-                    className="button primary"
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      if (mode === "catalog") {
-                        router.push(`/dashboard/connectors/${connector.id}`);
-                        return;
-                      }
-                      void connectConnector(connector.id);
-                    }}
-                    type="button"
-                  >
-                    Configure
-                  </button>
-                  <button
-                    className="button secondary"
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      void disconnectConnector(connector.id);
-                    }}
-                    type="button"
-                  >
-                    Disconnect
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
-        </article>
-        {mode === "detail" ? (
+  if (mode === "detail") {
+    return (
+      <div className="stack">
+        {notice ? <div className="notice">{notice}</div> : null}
         <article className="panel stack">
           <div className="section-heading">
             <div>
               <span className="eyebrow">Connector Setup</span>
-              <h2>{selected.name} setup</h2>
+              <h2>{selected.name}</h2>
+            </div>
+            <div className="row">
+              <button className="button secondary" onClick={() => router.push("/dashboard/connectors")} type="button">
+                Back to connectors
+              </button>
             </div>
           </div>
-          <label className="stack">
-            <span className="field-label">Select provider</span>
-            <select value={selectedConnector} onChange={(event) => setSelectedConnector(event.target.value)}>
-              {state.connectors.map((connector) => (
-                <option key={connector.id} value={connector.id}>
-                  {connector.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          <div className="setup-card">
-            <strong>{selected.name}</strong>
+          <div className="setup-card stack">
+            <div className="connector-brand-row">
+              <span className={`connector-logo connector-logo-${selected.accent}`}>
+                <img src={selected.logoUrl} alt={`${selected.name} logo`} className="connector-logo-image" />
+              </span>
+              <div>
+                <strong>{selected.name}</strong>
+                <p className="muted connector-meta">
+                  {selected.category} · {selected.auth}
+                </p>
+              </div>
+            </div>
             <p className="muted">{selected.description}</p>
             <p className="connector-meta">
               {selected.id === "halopsa"
                 ? "Live MCP tools: customer lookup, ticketing, action history, project search, contacts, documents, site devices, invoices, and guarded writes."
                 : selected.id === "n8n"
                   ? "n8n is set up for workflow catalog, execution lookups, and webhook-triggered automation runs across linked boxes."
-                : "Configuration is stored per tenant so each customer can have its own connector settings."}
+                  : "Configuration is stored per tenant so each customer can have its own connector settings."}
             </p>
-            <div className="chip-row">
-              {selected.tools.map((tool) => (
-                <span key={tool} className="chip">
-                  {tool}
-                </span>
-              ))}
-            </div>
           </div>
           <div className="field-grid">
             <label className="stack">
@@ -947,7 +769,7 @@ export function WorkspaceConsole({
                       ? "https://app.ninjarmm.com"
                       : selected.id === "n8n"
                         ? "https://n8n.example.com/api/v1"
-                      : "https://cipp.example.com"
+                        : "https://cipp.example.com"
                 }
               />
             </label>
@@ -1038,13 +860,6 @@ export function WorkspaceConsole({
           <div className="connector-meta">
             {selectedConfig.hasClientSecret ? "A secret is already saved for this connector." : "No secret saved yet."}
           </div>
-          <div className="notice">
-            {selected.id === "halopsa"
-              ? "HaloPSA now prefers the per-tenant settings saved here, then falls back to environment variables if needed."
-              : selected.id === "n8n"
-                ? "Save your n8n base API URL, optional workflow key, bearer token, and webhook base URL here so workflow listings and execution history can be linked into the Nexian API."
-              : `${selected.name} can now be added per tenant from this screen. Live token exchange and tool execution can be wired next on the same pattern as HaloPSA.`}
-          </div>
           <div className="row">
             <button className="button secondary" onClick={() => void saveConnectorConfig(selected.id)} type="button" disabled={savingConfigId === selected.id}>
               {savingConfigId === selected.id ? "Saving..." : "Save settings"}
@@ -1054,8 +869,189 @@ export function WorkspaceConsole({
             </button>
           </div>
         </article>
-        ) : null}
+      </div>
+    );
+  }
 
+  return (
+    <div className="console stack">
+      <section className="hero hero-console">
+        <div className="hero-copy stack">
+          <span className="eyebrow">Nexian AI & Automation Control Centre</span>
+          <h1 className="hero-title">Connect your MSP stack, control safe tools, and hand clients a single MCP endpoint.</h1>
+          <p className="muted hero-text">
+            HaloPSA now uses the real authorization-code route and exposes the expanded Nexian MCP surface for tickets,
+            actions, projects, contacts, knowledge, assets, invoices, and guarded writes. The other connectors remain
+            scaffolded until we wire their provider-specific token exchange and storage paths. n8n is included for
+            workflow boxes, execution history, and webhook-triggered automation runs.
+          </p>
+          <div className="stats-grid">
+            <div className="stat-card">
+              <strong>{connectedCount}</strong>
+              <span>Connected services</span>
+            </div>
+            <div className="stat-card">
+              <strong>{state.permissions.filter((item) => item.enabled).length}</strong>
+              <span>Enabled tools</span>
+            </div>
+            <div className="stat-card">
+              <strong>{session?.tenants.length ?? 1}</strong>
+              <span>Accessible tenants</span>
+            </div>
+          </div>
+          {notice ? <div className="notice">{notice}</div> : null}
+        </div>
+        <aside className="hero-side stack">
+          <div className="panel panel-dark stack">
+            <span className="eyebrow">Workspace</span>
+            <strong className="workspace-name">{state.workspaceName}</strong>
+            <label className="stack">
+              <span className="field-label">Tenant slug</span>
+              <input value={state.workspaceSlug} readOnly />
+            </label>
+            <label className="stack">
+              <span className="field-label">Tenant ID</span>
+              <input value={state.tenantId} readOnly />
+            </label>
+            <label className="stack">
+              <span className="field-label">User ID</span>
+              <input value={state.userId} readOnly />
+            </label>
+            <div className="stack">
+              <span className="field-label">Active tenants</span>
+              <div className="chip-row">
+                {(session?.tenants ?? []).map((tenant) => (
+                  <button
+                    key={tenant.id}
+                    className={`chip tenant-chip ${tenant.id === state.tenantId ? "active" : ""}`}
+                    onClick={() => void switchTenant(tenant.id)}
+                    type="button"
+                    disabled={switchingTenant}
+                  >
+                    {tenant.name} · {tenant.role}
+                  </button>
+                ))}
+              </div>
+            </div>
+            {canManageTenants ? (
+              <>
+                <label className="stack">
+                  <span className="field-label">Create tenant</span>
+                  <input
+                    value={newTenantName}
+                    onChange={(event) => setNewTenantName(event.target.value)}
+                    placeholder="Add a new customer workspace"
+                  />
+                </label>
+                <div className="row">
+                  <button className="button primary" onClick={() => void createTenant()} type="button" disabled={creatingTenant}>
+                    {creatingTenant ? "Creating..." : "Create tenant"}
+                  </button>
+                  <button className="button secondary" onClick={signOut} type="button">
+                    Sign out
+                  </button>
+                </div>
+              </>
+            ) : (
+              <div className="row">
+                <button className="button secondary" onClick={signOut} type="button">
+                  Sign out
+                </button>
+              </div>
+            )}
+          </div>
+        </aside>
+      </section>
+
+      <section className="dashboard-grid">
+        <article className="panel stack">
+          <div className="section-heading">
+            <div>
+              <span className="eyebrow">Connectors</span>
+              <h2>Service connections</h2>
+            </div>
+            <span className="badge">{connectedCount} live</span>
+          </div>
+          <div className="connector-grid">
+            {state.connectors.map((connector) => (
+              <div
+                key={connector.id}
+                className={`connector-card connector-card-${connector.accent} ${selectedConnector === connector.id ? "selected" : ""}`}
+                onClick={() => {
+                  setSelectedConnector(connector.id);
+                  if (mode === "catalog") {
+                    router.push(`/dashboard/connectors/${connector.id}`);
+                  }
+                }}
+                role="button"
+                tabIndex={0}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    setSelectedConnector(connector.id);
+                    if (mode === "catalog") {
+                      router.push(`/dashboard/connectors/${connector.id}`);
+                    }
+                  }
+                }}
+              >
+                <div className="row row-spread">
+                  <div>
+                    <div className="connector-brand-row">
+                      <span className={`connector-logo connector-logo-${connector.accent}`}>
+                        <img src={connector.logoUrl} alt={`${connector.name} logo`} className="connector-logo-image" />
+                      </span>
+                      <div>
+                        <strong>{connector.name}</strong>
+                        <p className="muted connector-meta">
+                          {connector.category} · {connector.auth}
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                  <span className={`status-pill ${connector.status.toLowerCase().replace(/\s+/g, "-")}`}>{connector.status}</span>
+                </div>
+                <p className="muted">{connector.description}</p>
+                <p className="connector-meta">Last activity: {connector.lastSync}</p>
+                {connector.lastError ? <p className="danger-text">{connector.lastError}</p> : null}
+                <div className="chip-row">
+                  {connector.tools.slice(0, connector.id === "halopsa" ? 6 : 3).map((tool) => (
+                    <span key={tool} className="chip">
+                      {tool}
+                    </span>
+                  ))}
+                </div>
+                <p className="connector-meta">{connector.tools.length} MCP tools available</p>
+                <div className="row">
+                  <button
+                    className="button primary"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      if (mode === "catalog") {
+                        router.push(`/dashboard/connectors/${connector.id}`);
+                        return;
+                      }
+                      void connectConnector(connector.id);
+                    }}
+                    type="button"
+                  >
+                    Configure
+                  </button>
+                  <button
+                    className="button secondary"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      void disconnectConnector(connector.id);
+                    }}
+                    type="button"
+                  >
+                    Disconnect
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </article>
         <article className="panel stack">
           <div className="section-heading">
             <div>
