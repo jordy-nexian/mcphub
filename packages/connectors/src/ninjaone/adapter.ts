@@ -5,7 +5,7 @@ import type { ProviderAdapter } from "@nexian/core/connectors/contracts";
 export const ninjaOneAdapter: ProviderAdapter = {
   provider: "ninjaone",
   displayName: "NinjaOne",
-  supportsOAuth: false,
+  supportsOAuth: true,
   getTools() {
     return [
       createStubTool("list_devices_for_site", "List managed endpoints and device health for a customer or site."),

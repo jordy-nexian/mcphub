@@ -240,6 +240,40 @@ thead th { color: #b9d7e6; font-size: 0.78rem; font-weight: 700; letter-spacing:
 
 .connector-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
 .connector-card, .setup-card, .credential-card { padding: 20px; border: 1px solid var(--line); border-radius: 20px; background: rgba(255, 255, 255, 0.72); }
+.connector-card { position: relative; overflow: hidden; }
+.connector-card::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto auto 0;
+  width: 100%;
+  height: 4px;
+  background: linear-gradient(90deg, rgba(24, 163, 118, 0.65), rgba(24, 140, 214, 0.65));
+}
+.connector-card-halo::before { background: linear-gradient(90deg, rgba(15, 170, 140, 0.7), rgba(66, 120, 255, 0.7)); }
+.connector-card-m365::before { background: linear-gradient(90deg, rgba(37, 99, 235, 0.72), rgba(59, 130, 246, 0.5)); }
+.connector-card-ninja::before { background: linear-gradient(90deg, rgba(245, 158, 11, 0.75), rgba(234, 88, 12, 0.55)); }
+.connector-card-cipp::before { background: linear-gradient(90deg, rgba(34, 197, 94, 0.72), rgba(16, 185, 129, 0.5)); }
+.connector-card-n8n::before { background: linear-gradient(90deg, rgba(249, 115, 22, 0.75), rgba(239, 68, 68, 0.55)); }
+.connector-brand-row { display: flex; align-items: center; gap: 14px; }
+.connector-logo {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 14px;
+  font-size: 0.95rem;
+  font-weight: 800;
+  letter-spacing: 0.03em;
+  color: #0f2430;
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.92), rgba(222, 240, 245, 0.95));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.65);
+}
+.connector-logo-halo { color: #0f766e; background: linear-gradient(135deg, rgba(204, 251, 241, 0.95), rgba(191, 219, 254, 0.92)); }
+.connector-logo-m365 { color: #1d4ed8; background: linear-gradient(135deg, rgba(219, 234, 254, 0.95), rgba(191, 219, 254, 0.92)); }
+.connector-logo-ninja { color: #c2410c; background: linear-gradient(135deg, rgba(254, 243, 199, 0.96), rgba(254, 215, 170, 0.92)); }
+.connector-logo-cipp { color: #047857; background: linear-gradient(135deg, rgba(220, 252, 231, 0.96), rgba(167, 243, 208, 0.92)); }
+.connector-logo-n8n { color: #c2410c; background: linear-gradient(135deg, rgba(255, 237, 213, 0.97), rgba(254, 202, 202, 0.92)); }
 
 .chip-row { display: flex; flex-wrap: wrap; gap: 10px; }
 .chip, .status-pill {

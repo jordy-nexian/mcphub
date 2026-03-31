@@ -210,6 +210,20 @@ export class ConnectorService {
       return { authorizationUrl: `${haloConfig.authUrl}/auth/authorize?${params.toString()}` };
     }
 
+    if (provider === "ninjaone") {
+      const ninjaConfig = await this.resolveNinjaOneConfig(tenantId);
+      const state = createOAuthState({ provider, tenantId, userId, returnTo }, config.oauthStateSigningSecret);
+      const params = new URLSearchParams({
+        client_id: ninjaConfig.clientId,
+        redirect_uri: ninjaConfig.redirectUri,
+        response_type: "code",
+        scope: ninjaConfig.scopes.join(" "),
+        state
+      });
+
+      return { authorizationUrl: `${ninjaConfig.authUrl}/ws/oauth/authorize?${params.toString()}` };
+    }
+
     const adapter = this.registry.get(provider);
     if (!adapter?.supportsOAuth || !adapter.getAuthorizationUrl) {
       throw new Error(`Provider ${provider} does not support OAuth`);
@@ -273,6 +287,63 @@ export class ConnectorService {
         provider,
         expiresAt: tokens.expiresAt,
         scopes: tokens.scopes ?? haloConfig.scopes
+      };
+    }
+
+    if (provider === "ninjaone") {
+      const payload = verifyOAuthState(state, config.oauthStateSigningSecret);
+      const ninjaConfig = await this.resolveNinjaOneConfig(payload.tenantId);
+      const tokens = await this.exchangeNinjaOneToken(
+        ninjaConfig,
+        new URLSearchParams({
+          grant_type: "authorization_code",
+          client_id: ninjaConfig.clientId,
+          client_secret: ninjaConfig.clientSecret,
+          code,
+          redirect_uri: ninjaConfig.redirectUri
+        })
+      );
+      const now = new Date();
+      const account: ConnectedAccountRecord = {
+        id: crypto.randomUUID(),
+        tenantId: payload.tenantId,
+        userId: payload.userId,
+        provider,
+        providerAccountId: payload.userId,
+        accessTokenEncrypted: this.encryption.encrypt(tokens.accessToken),
+        refreshTokenEncrypted: tokens.refreshToken ? this.encryption.encrypt(tokens.refreshToken) : undefined,
+        expiresAt: tokens.expiresAt,
+        scopes: tokens.scopes ?? ninjaConfig.scopes,
+        metadataJson: {
+          connectedVia: "oauth_authorization_code",
+          apiUrl: ninjaConfig.apiUrl,
+          authUrl: ninjaConfig.authUrl,
+          clientId: ninjaConfig.clientId,
+          redirectUri: ninjaConfig.redirectUri,
+          scopes: ninjaConfig.scopes
+        },
+        status: "ACTIVE",
+        lastError: undefined,
+        createdAt: now,
+        updatedAt: now
+      };
+
+      await this.store.upsert(account);
+      await this.auditService.log({
+        tenantId: payload.tenantId,
+        userId: payload.userId,
+        action: "CONNECTOR_CONNECTED",
+        targetType: "connected_account",
+        metadata: { provider }
+      });
+
+      return {
+        returnTo: payload.returnTo ?? `${config.appUrl}/dashboard/connectors`,
+        tenantId: payload.tenantId,
+        userId: payload.userId,
+        provider,
+        expiresAt: tokens.expiresAt,
+        scopes: tokens.scopes ?? ninjaConfig.scopes
       };
     }
 
@@ -364,7 +435,9 @@ export class ConnectorService {
           provider,
           config: {
             apiUrl: configJson.apiUrl ?? "",
+            authUrl: configJson.authUrl ?? "",
             clientId: configJson.clientId ?? "",
+            redirectUri: configJson.redirectUri ?? "",
             scopes: (configJson.scopes ?? ["monitoring", "devices", "organizations"]).join(" "),
             hasClientSecret: Boolean(configJson.clientSecretEncrypted)
           }
@@ -1295,6 +1368,24 @@ export class ConnectorService {
     return normalized.endsWith("/oauth/halopsa/callback") ? normalized : `${normalized}/oauth/halopsa/callback`;
   }
 
+  private normalizeNinjaOneBaseUrl(value: string | undefined) {
+    const normalized = this.normalizeApiUrl(value);
+    if (!normalized) {
+      return normalized;
+    }
+
+    return normalized.replace(/\/ws\/oauth(?:\/authorize|\/token)?$/i, "");
+  }
+
+  private normalizeNinjaOneRedirectUri(value: string | undefined) {
+    const normalized = this.normalizeApiUrl(value);
+    if (!normalized) {
+      return undefined;
+    }
+
+    return normalized.endsWith("/oauth/ninjaone/callback") ? normalized : `${normalized}/oauth/ninjaone/callback`;
+  }
+
   private parseScopes(value: unknown, fallback: string[]) {
     if (Array.isArray(value)) {
       const scopes = value.map((item) => String(item).trim()).filter(Boolean);
@@ -1343,8 +1434,16 @@ export class ConnectorService {
       case "ninjaone":
         return {
           apiUrl,
+          authUrl:
+            this.normalizeNinjaOneBaseUrl(this.readOptionalString(input, "authUrl"))
+            ?? this.normalizeNinjaOneBaseUrl(existing.authUrl)
+            ?? apiUrl,
           clientId,
           clientSecretEncrypted,
+          redirectUri:
+            this.normalizeNinjaOneRedirectUri(this.readOptionalString(input, "redirectUri") ?? existing.redirectUri)
+            ?? this.normalizeNinjaOneRedirectUri(process.env.NINJAONE_REDIRECT_URI)
+            ?? `${config.apiUrl}/oauth/ninjaone/callback`,
           scopes: this.parseScopes(input.scopes, existing.scopes ?? ["monitoring", "devices", "organizations"])
         } satisfies StoredConnectorConfig;
       case "cipp":
@@ -1412,6 +1511,26 @@ export class ConnectorService {
     };
   }
 
+  private async resolveNinjaOneConfig(tenantId: string) {
+    const stored = ((await this.configStore.get(tenantId, "ninjaone"))?.configJson ?? {}) as StoredConnectorConfig;
+    const apiUrl = this.normalizeNinjaOneBaseUrl(stored.apiUrl ?? process.env.NINJAONE_BASE_URL ?? process.env.NINJAONE_URL);
+    const authUrl = this.normalizeNinjaOneBaseUrl(stored.authUrl ?? process.env.NINJAONE_AUTH_URL) ?? apiUrl;
+    const clientId = stored.clientId ?? process.env.NINJAONE_CLIENT_ID;
+    const clientSecret =
+      stored.clientSecretEncrypted ? this.encryption.decrypt(stored.clientSecretEncrypted) : process.env.NINJAONE_CLIENT_SECRET;
+    const redirectUri =
+      this.normalizeNinjaOneRedirectUri(stored.redirectUri)
+      ?? this.normalizeNinjaOneRedirectUri(process.env.NINJAONE_REDIRECT_URI)
+      ?? `${config.apiUrl}/oauth/ninjaone/callback`;
+    const scopes = stored.scopes ?? (process.env.NINJAONE_SCOPES ?? "monitoring devices organizations").split(/\s+/).filter(Boolean);
+
+    if (!apiUrl || !authUrl || !clientId || !clientSecret) {
+      throw new Error("NinjaOne requires API URL, client ID, and client secret in connector settings before connecting");
+    }
+
+    return { apiUrl, authUrl, clientId, clientSecret, redirectUri, scopes };
+  }
+
   private async exchangeHaloToken(
     haloConfig: { apiUrl: string; authUrl: string; clientId: string; clientSecret: string; redirectUri: string; scopes: string[] },
     params: URLSearchParams
@@ -1442,6 +1561,39 @@ export class ConnectorService {
       refreshToken: payload.refresh_token,
       expiresAt: payload.expires_in ? new Date(Date.now() + payload.expires_in * 1000) : undefined,
       scopes: payload.scope?.split(" ").filter(Boolean)
+    };
+  }
+
+  private async exchangeNinjaOneToken(
+    ninjaConfig: { apiUrl: string; authUrl: string; clientId: string; clientSecret: string; redirectUri: string; scopes: string[] },
+    params: URLSearchParams
+  ) {
+    const response = await fetch(`${ninjaConfig.authUrl}/ws/oauth/token`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/x-www-form-urlencoded",
+        accept: "application/json"
+      },
+      body: params.toString()
+    });
+
+    if (!response.ok) {
+      const body = await response.text();
+      throw new Error(`NinjaOne token exchange failed (${response.status}): ${body}`);
+    }
+
+    const payload = (await response.json()) as {
+      access_token: string;
+      refresh_token?: string;
+      expires_in?: number;
+      scope?: string;
+    };
+
+    return {
+      accessToken: payload.access_token,
+      refreshToken: payload.refresh_token,
+      expiresAt: payload.expires_in ? new Date(Date.now() + payload.expires_in * 1000) : undefined,
+      scopes: payload.scope?.split(/\s+/).filter(Boolean)
     };
   }
 

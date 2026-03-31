@@ -16,6 +16,8 @@ type Connector = {
   tools: string[];
   lastError?: string;
   realOAuth?: boolean;
+  logo: string;
+  accent: string;
 };
 
 type ConnectorConfig = {
@@ -88,7 +90,9 @@ const initialState: DemoState = {
         "create_draft_ticket",
         "add_internal_note"
       ],
-      realOAuth: true
+      realOAuth: true,
+      logo: "H",
+      accent: "halo"
     },
     {
       id: "microsoft365",
@@ -98,37 +102,22 @@ const initialState: DemoState = {
       status: "Needs consent",
       description: "Search SharePoint, projects, and tenant-approved contacts.",
       lastSync: "Scaffold only",
-      tools: ["search_documents", "search_projects", "find_contact"]
-    },
-    {
-      id: "hubspot",
-      name: "HubSpot CRM",
-      category: "CRM",
-      auth: "OAuth 2.0",
-      status: "Needs consent",
-      description: "Client relationship context for people and companies.",
-      lastSync: "Scaffold only",
-      tools: ["find_contact"]
-    },
-    {
-      id: "itglue",
-      name: "IT Glue",
-      category: "Documentation",
-      auth: "API key",
-      status: "Disconnected",
-      description: "Knowledge base, device, and documentation lookup.",
-      lastSync: "Not connected",
-      tools: ["search_documents", "list_devices_for_site"]
+      tools: ["search_documents", "search_projects", "find_contact"],
+      logo: "M",
+      accent: "m365"
     },
     {
       id: "ninjaone",
       name: "NinjaOne",
       category: "RMM",
-      auth: "API key",
+      auth: "OAuth 2.0",
       status: "Disconnected",
-      description: "Managed device, scripting, and endpoint context for MSP operations.",
+      description: "Managed devices, endpoint operations, and technician context for MSP teams.",
       lastSync: "Not configured",
-      tools: ["list_devices_for_site", "search_documents", "find_contact"]
+      tools: ["list_devices_for_site", "search_documents", "find_contact"],
+      realOAuth: true,
+      logo: "N",
+      accent: "ninja"
     },
     {
       id: "cipp",
@@ -138,7 +127,9 @@ const initialState: DemoState = {
       status: "Disconnected",
       description: "Cross-tenant Microsoft 365 administration and operational context.",
       lastSync: "Not configured",
-      tools: ["find_contact", "search_documents", "search_projects"]
+      tools: ["find_contact", "search_documents", "search_projects"],
+      logo: "C",
+      accent: "cipp"
     },
     {
       id: "n8n",
@@ -148,7 +139,9 @@ const initialState: DemoState = {
       status: "Disconnected",
       description: "Workflow boxes, webhook execution history, and API-driven automation runs for linked customer flows.",
       lastSync: "Not configured",
-      tools: ["list_workflows", "get_workflow", "list_executions", "get_execution", "trigger_webhook"]
+      tools: ["list_workflows", "get_workflow", "list_executions", "get_execution", "trigger_webhook"],
+      logo: "n8n",
+      accent: "n8n"
     }
   ],
   permissions: [
@@ -408,19 +401,19 @@ export function WorkspaceConsole() {
 
     setSelectedConnector(id);
 
-    if (connector.id === "halopsa") {
+    if (connector.id === "halopsa" || connector.id === "ninjaone") {
       if (!session) {
         router.replace("/auth/login");
         return;
       }
 
-      const configEntry = connectorConfigs.halopsa;
+      const configEntry = connectorConfigs[connector.id];
       if (!configEntry?.apiUrl || !configEntry?.clientId || (!configEntry.clientSecret && !configEntry.hasClientSecret)) {
-        setNotice("Save the HaloPSA API URL, client ID, and client secret in Connector Setup before starting OAuth.");
+        setNotice(`Save the ${connector.name} API URL, client ID, and client secret in Connector Setup before starting OAuth.`);
         return;
       }
 
-      const response = await fetch(`${apiOrigin}/oauth/halopsa/url`, {
+      const response = await fetch(`${apiOrigin}/oauth/${connector.id}/url`, {
         method: "POST",
         headers: {
           "content-type": "application/json",
@@ -814,13 +807,18 @@ export function WorkspaceConsole() {
           </div>
           <div className="connector-grid">
             {state.connectors.map((connector) => (
-              <div key={connector.id} className="connector-card">
+              <div key={connector.id} className={`connector-card connector-card-${connector.accent}`}>
                 <div className="row row-spread">
                   <div>
-                    <strong>{connector.name}</strong>
-                    <p className="muted connector-meta">
-                      {connector.category} · {connector.auth}
-                    </p>
+                    <div className="connector-brand-row">
+                      <span className={`connector-logo connector-logo-${connector.accent}`}>{connector.logo}</span>
+                      <div>
+                        <strong>{connector.name}</strong>
+                        <p className="muted connector-meta">
+                          {connector.category} · {connector.auth}
+                        </p>
+                      </div>
+                    </div>
                   </div>
                   <span className={`status-pill ${connector.status.toLowerCase().replace(/\s+/g, "-")}`}>{connector.status}</span>
                 </div>
@@ -834,10 +832,10 @@ export function WorkspaceConsole() {
                     </span>
                   ))}
                 </div>
-                {connector.id === "halopsa" ? <p className="connector-meta">{connector.tools.length} MCP tools available</p> : null}
+                <p className="connector-meta">{connector.tools.length} MCP tools available</p>
                 <div className="row">
                   <button className="button primary" onClick={() => connectConnector(connector.id)} type="button">
-                    {connector.id === "halopsa" ? "Connect with HaloPSA" : "Configure"}
+                    {connector.realOAuth ? `Connect ${connector.name}` : "Configure"}
                   </button>
                   <button className="button secondary" onClick={() => void disconnectConnector(connector.id)} type="button">
                     Disconnect
@@ -900,13 +898,17 @@ export function WorkspaceConsole() {
                 }
               />
             </label>
-            {selected.id === "halopsa" ? (
+            {selected.id === "halopsa" || selected.id === "ninjaone" ? (
               <label className="stack">
                 <span className="field-label">Auth URL</span>
                 <input
                   value={selectedConfig.authUrl}
                   onChange={(event) => updateConnectorConfig(selected.id, { authUrl: event.target.value })}
-                  placeholder="Optional: https://yourhalo.example.com/auth"
+                  placeholder={
+                    selected.id === "halopsa"
+                      ? "Optional: https://yourhalo.example.com/auth"
+                      : "Optional: https://app.ninjarmm.com"
+                  }
                 />
               </label>
             ) : null}
@@ -924,7 +926,7 @@ export function WorkspaceConsole() {
                 }
               />
             </label>
-            {selected.id === "halopsa" || selected.id === "n8n" ? (
+            {selected.id === "halopsa" || selected.id === "ninjaone" || selected.id === "n8n" ? (
               <label className="stack">
                 <span className="field-label">
                   {selected.id === "n8n" ? "Webhook base URL" : "Redirect URI"}
@@ -935,7 +937,9 @@ export function WorkspaceConsole() {
                   placeholder={
                     selected.id === "n8n"
                       ? "https://n8n.example.com/webhook"
-                      : "https://api.example.com/oauth/halopsa/callback"
+                      : selected.id === "ninjaone"
+                        ? "https://api.example.com/oauth/ninjaone/callback"
+                        : "https://api.example.com/oauth/halopsa/callback"
                   }
                 />
               </label>
