@@ -36,7 +36,8 @@ const tenantNav = [
     section: "Workspace",
     items: [
       { href: "/dashboard", label: "Overview", caption: "Workspace health" },
-      { href: "/dashboard/connectors", label: "Connectors", caption: "Linked products" }
+      { href: "/dashboard/connectors", label: "Connectors", caption: "Linked products" },
+      { href: "/dashboard/connectors/settings", label: "Connector settings", caption: "Credentials and OAuth" }
     ]
   },
   {

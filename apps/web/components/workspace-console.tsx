@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { startTransition, useEffect, useMemo, useState } from "react";
 
@@ -16,7 +17,7 @@ type Connector = {
   tools: string[];
   lastError?: string;
   realOAuth?: boolean;
-  logo: string;
+  logoUrl: string;
   accent: string;
 };
 
@@ -91,7 +92,7 @@ const initialState: DemoState = {
         "add_internal_note"
       ],
       realOAuth: true,
-      logo: "H",
+      logoUrl: "https://www.topleft.team/hs-fs/hubfs/HaloPSA.jpg?width=1200&height=738&name=HaloPSA.jpg",
       accent: "halo"
     },
     {
@@ -103,7 +104,8 @@ const initialState: DemoState = {
       description: "Search SharePoint, projects, and tenant-approved contacts.",
       lastSync: "Scaffold only",
       tools: ["search_documents", "search_projects", "find_contact"],
-      logo: "M",
+      logoUrl:
+        "https://upload.wikimedia.org/wikipedia/commons/thumb/e/ec/Microsoft_Office_SharePoint_%282019%E2%80%932025%29.svg/3840px-Microsoft_Office_SharePoint_%282019%E2%80%932025%29.svg.png",
       accent: "m365"
     },
     {
@@ -116,7 +118,7 @@ const initialState: DemoState = {
       lastSync: "Not configured",
       tools: ["list_devices_for_site", "search_documents", "find_contact"],
       realOAuth: true,
-      logo: "N",
+      logoUrl: "https://www.logo-designer.co/storage/2021/11/2021-it-firm-ninjaone-new-logo-design.png",
       accent: "ninja"
     },
     {
@@ -128,7 +130,8 @@ const initialState: DemoState = {
       description: "Cross-tenant Microsoft 365 administration and operational context.",
       lastSync: "Not configured",
       tools: ["find_contact", "search_documents", "search_projects"],
-      logo: "C",
+      logoUrl:
+        "https://docs.cipp.app/~gitbook/image?url=https%3A%2F%2F3168297744-files.gitbook.io%2F%7E%2Ffiles%2Fv0%2Fb%2Fgitbook-x-prod.appspot.com%2Fo%2Fspaces%252FhV8luribpATiHNQ8bdts%252Flogo%252FiccskRbgKmK11Dgbuhbk%252FCIPP-logo-main-border_00%2520-%2520Copy.png%3Falt%3Dmedia%26token%3D3d8b7c87-fce0-49ae-9e46-d371d4091416&width=260&dpr=3&quality=100&sign=24bb285c&sv=2",
       accent: "cipp"
     },
     {
@@ -140,7 +143,7 @@ const initialState: DemoState = {
       description: "Workflow boxes, webhook execution history, and API-driven automation runs for linked customer flows.",
       lastSync: "Not configured",
       tools: ["list_workflows", "get_workflow", "list_executions", "get_execution", "trigger_webhook"],
-      logo: "n8n",
+      logoUrl: "https://n8n.io/favicon.ico",
       accent: "n8n"
     }
   ],
@@ -195,7 +198,13 @@ function mapProviderStatus(status: string | undefined): Connector["status"] {
   return "Needs consent";
 }
 
-export function WorkspaceConsole() {
+export function WorkspaceConsole({
+  mode = "overview",
+  initialSelectedConnector
+}: {
+  mode?: "overview" | "settings";
+  initialSelectedConnector?: string;
+}) {
   const router = useRouter();
   const [state, setState] = useState<DemoState>(initialState);
   const [session, setSession] = useState<PlatformSession | null>(null);
@@ -227,6 +236,12 @@ export function WorkspaceConsole() {
     }
     setIsHydrated(true);
   }, []);
+
+  useEffect(() => {
+    if (initialSelectedConnector && initialState.connectors.some((connector) => connector.id === initialSelectedConnector)) {
+      setSelectedConnector(initialSelectedConnector);
+    }
+  }, [initialSelectedConnector]);
 
   useEffect(() => {
     const storedSession = readPlatformSession();
@@ -801,9 +816,20 @@ export function WorkspaceConsole() {
           <div className="section-heading">
             <div>
               <span className="eyebrow">Connectors</span>
-              <h2>Service connections</h2>
+              <h2>{mode === "settings" ? "Connector catalogue" : "Service connections"}</h2>
             </div>
-            <span className="badge">{connectedCount} live</span>
+            <div className="row">
+              <span className="badge">{connectedCount} live</span>
+              {mode === "overview" ? (
+                <Link href="/dashboard/connectors/settings" className="button secondary">
+                  Connector settings
+                </Link>
+              ) : (
+                <Link href="/dashboard/connectors" className="button secondary">
+                  Back to connectors
+                </Link>
+              )}
+            </div>
           </div>
           <div className="connector-grid">
             {state.connectors.map((connector) => (
@@ -811,7 +837,9 @@ export function WorkspaceConsole() {
                 <div className="row row-spread">
                   <div>
                     <div className="connector-brand-row">
-                      <span className={`connector-logo connector-logo-${connector.accent}`}>{connector.logo}</span>
+                      <span className={`connector-logo connector-logo-${connector.accent}`}>
+                        <img src={connector.logoUrl} alt={`${connector.name} logo`} className="connector-logo-image" />
+                      </span>
                       <div>
                         <strong>{connector.name}</strong>
                         <p className="muted connector-meta">
@@ -837,6 +865,11 @@ export function WorkspaceConsole() {
                   <button className="button primary" onClick={() => connectConnector(connector.id)} type="button">
                     {connector.realOAuth ? `Connect ${connector.name}` : "Configure"}
                   </button>
+                  {mode === "overview" ? (
+                    <Link href={`/dashboard/connectors/settings?provider=${connector.id}`} className="button secondary">
+                      Settings
+                    </Link>
+                  ) : null}
                   <button className="button secondary" onClick={() => void disconnectConnector(connector.id)} type="button">
                     Disconnect
                   </button>
@@ -846,11 +879,12 @@ export function WorkspaceConsole() {
           </div>
         </article>
 
+        {mode === "settings" ? (
         <article className="panel stack">
           <div className="section-heading">
             <div>
               <span className="eyebrow">Connector Setup</span>
-              <h2>Onboarding workflow</h2>
+              <h2>Configuration</h2>
             </div>
           </div>
           <label className="stack">
@@ -997,10 +1031,31 @@ export function WorkspaceConsole() {
               {savingConfigId === selected.id ? "Saving..." : "Save settings"}
             </button>
             <button className="button primary" onClick={() => connectConnector(selected.id)} type="button">
-              {selected.id === "halopsa" ? "Start HaloPSA OAuth" : selected.id === "n8n" ? "Link n8n workspace" : "Use selected connector"}
+              {selected.realOAuth ? `Start ${selected.name} OAuth` : selected.id === "n8n" ? "Link n8n workspace" : "Use selected connector"}
             </button>
           </div>
         </article>
+        ) : (
+        <article className="panel stack">
+          <div className="section-heading">
+            <div>
+              <span className="eyebrow">Configuration</span>
+              <h2>Move setup out of the way</h2>
+            </div>
+          </div>
+          <div className="setup-card stack">
+            <strong>Use the dedicated settings page for credentials and OAuth setup.</strong>
+            <p className="muted">
+              Keep this connectors page focused on what is linked, what tools are exposed, and which platforms are ready for your tenants.
+            </p>
+            <div className="row">
+              <Link href="/dashboard/connectors/settings" className="button primary">
+                Open connector settings
+              </Link>
+            </div>
+          </div>
+        </article>
+        )}
 
         <article className="panel stack">
           <div className="section-heading">

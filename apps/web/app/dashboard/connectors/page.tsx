@@ -9,7 +9,7 @@ export default function ConnectorsPage() {
         title="Connected products"
         description="Manage tenant integrations, onboarding flows, and safe AI tool exposure from a single workspace."
       />
-      <WorkspaceConsole />
+      <WorkspaceConsole mode="overview" />
     </div>
   );
 }
