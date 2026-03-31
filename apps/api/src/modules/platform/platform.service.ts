@@ -26,6 +26,7 @@ type TenantListRow = TenantRow & {
 type UserRow = {
   id: string;
   tenant_id: string;
+  password_hash?: string;
   email: string;
   display_name: string;
   role: string;
@@ -365,6 +366,100 @@ export class PlatformService {
       status: row.status,
       lastActiveAt: row.last_active_at?.toISOString() ?? new Date().toISOString()
     }));
+  }
+
+  async createUser(input: {
+    tenantId: string;
+    email: string;
+    displayName: string;
+    role: string;
+    temporaryPassword?: string;
+  }) {
+    await this.ensureSeedData();
+
+    const email = input.email.toLowerCase().trim();
+    const displayName = input.displayName.trim();
+    const role = input.role.trim().toUpperCase();
+    const temporaryPassword =
+      input.temporaryPassword?.trim() || crypto.randomBytes(6).toString("base64url");
+
+    const tenantResult = await pool.query<TenantRow>(
+      `SELECT id, slug, name, tenant_type, status, plan, vertical, region, parent_tenant_id, branding_json, created_at, updated_at
+       FROM tenants
+       WHERE id = $1
+       LIMIT 1`,
+      [input.tenantId]
+    );
+    const tenant = tenantResult.rows[0];
+    if (!tenant) {
+      throw new Error("Tenant not found");
+    }
+
+    const existingUser = await pool.query<UserRow>(
+      `SELECT id, tenant_id, email, display_name, role, status, last_active_at
+       FROM platform_users
+       WHERE email = $1
+       LIMIT 1`,
+      [email]
+    );
+    if (existingUser.rows[0]) {
+      throw new Error("A user with that email already exists");
+    }
+
+    const userId = crypto.randomUUID();
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+
+      await client.query(
+        `
+          INSERT INTO platform_users (
+            id, tenant_id, email, password_hash, display_name, role, status, last_active_at, created_at, updated_at
+          ) VALUES (
+            $1, $2, $3, $4, $5, $6, 'ACTIVE', NOW(), NOW(), NOW()
+          )
+        `,
+        [userId, tenant.id, email, hashPassword(temporaryPassword), displayName, role]
+      );
+
+      await client.query(
+        `
+          INSERT INTO tenant_memberships (user_id, tenant_id, role, created_at)
+          VALUES ($1, $2, $3, NOW())
+          ON CONFLICT (user_id, tenant_id) DO UPDATE SET
+            role = EXCLUDED.role
+        `,
+        [userId, tenant.id, role]
+      );
+
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+
+    await this.auditService.log({
+      tenantId: tenant.id,
+      userId,
+      action: "USER_CREATED",
+      targetType: "platform_user",
+      targetId: userId,
+      metadata: { email, role }
+    });
+
+    return {
+      id: userId,
+      tenantId: tenant.id,
+      tenantName: tenant.name,
+      email,
+      displayName,
+      role,
+      status: "ACTIVE",
+      lastActiveAt: new Date().toISOString(),
+      temporaryPassword
+    };
   }
 
   async getConnectorSummary() {

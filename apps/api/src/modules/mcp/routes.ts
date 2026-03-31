@@ -78,6 +78,14 @@ const switchTenantSchema = z.object({
   tenantId: z.string().min(1)
 });
 
+const createPlatformUserSchema = z.object({
+  tenantId: z.string().min(1),
+  email: z.string().email(),
+  displayName: z.string().min(1),
+  role: z.enum(["OWNER", "ADMIN", "ANALYST", "USER"]),
+  temporaryPassword: z.string().min(8).optional()
+});
+
 function parseBasicClientCredentials(authorizationHeader: string | undefined) {
   if (!authorizationHeader?.startsWith("Basic ")) {
     return undefined;
@@ -670,6 +678,16 @@ export function registerApiRoutes(
   app.get("/platform/users", async () => ({
     users: await deps.platformService.listUsers()
   }));
+
+  app.post("/platform/users", async (request, reply) => {
+    const auth = parsePlatformAuthFromRequest(request, deps.authService);
+    if (!auth) {
+      return reply.status(401).send({ error: "unauthorized" });
+    }
+
+    const body = createPlatformUserSchema.parse(request.body);
+    return deps.platformService.createUser(body);
+  });
 
   app.get("/platform/connectors", async () => ({
     connectors: await deps.platformService.getConnectorSummary()
