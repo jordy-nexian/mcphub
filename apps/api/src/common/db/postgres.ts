@@ -64,10 +64,27 @@ export async function ensureDatabaseSchema() {
       await addColumnIfMissing("platform_users", "status", "TEXT NOT NULL DEFAULT 'ACTIVE'");
       await addColumnIfMissing("platform_users", "last_active_at", "TIMESTAMPTZ NULL");
 
-      await pool.query(`
-        CREATE INDEX IF NOT EXISTS platform_users_tenant_idx
-        ON platform_users (tenant_id);
-      `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS platform_users_tenant_idx
+    ON platform_users (tenant_id);
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS tenant_memberships (
+      user_id TEXT NOT NULL,
+      tenant_id TEXT NOT NULL,
+      role TEXT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      PRIMARY KEY (user_id, tenant_id)
+    );
+  `);
+
+  await pool.query(`
+    INSERT INTO tenant_memberships (user_id, tenant_id, role)
+    SELECT id, tenant_id, role
+    FROM platform_users
+    ON CONFLICT (user_id, tenant_id) DO NOTHING;
+  `);
 
       await pool.query(`
         CREATE TABLE IF NOT EXISTS oauth_authorization_codes (

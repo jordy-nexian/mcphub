@@ -3,7 +3,7 @@
 import { useRouter } from "next/navigation";
 import { startTransition, useEffect, useMemo, useState } from "react";
 
-import { clearPlatformSession, readPlatformSession, type PlatformSession } from "../lib/platform-auth";
+import { clearPlatformSession, readPlatformSession, writePlatformSession, type PlatformSession } from "../lib/platform-auth";
 
 type Connector = {
   id: string;
@@ -64,8 +64,10 @@ const initialState: DemoState = {
       lastSync: "Not connected",
       tools: [
         "find_customer",
+        "get_customer_overview",
         "list_open_tickets",
         "get_ticket",
+        "get_ticket_with_actions",
         "list_ticket_actions",
         "search_projects",
         "find_contact",
@@ -110,8 +112,10 @@ const initialState: DemoState = {
   ],
   permissions: [
     { tool: "find_customer", roles: ["Owner", "Admin", "Analyst", "User"], enabled: true },
+    { tool: "get_customer_overview", roles: ["Owner", "Admin", "Analyst", "User"], enabled: true },
     { tool: "list_open_tickets", roles: ["Owner", "Admin", "Analyst", "User"], enabled: true },
     { tool: "get_ticket", roles: ["Owner", "Admin", "Analyst", "User"], enabled: true },
+    { tool: "get_ticket_with_actions", roles: ["Owner", "Admin", "Analyst", "User"], enabled: true },
     { tool: "list_ticket_actions", roles: ["Owner", "Admin", "Analyst", "User"], enabled: true },
     { tool: "search_projects", roles: ["Owner", "Admin", "Analyst", "User"], enabled: true },
     { tool: "find_contact", roles: ["Owner", "Admin", "Analyst", "User"], enabled: true },
@@ -162,6 +166,9 @@ export function WorkspaceConsole() {
   const [notice, setNotice] = useState("");
   const [loadingToken, setLoadingToken] = useState(false);
   const [isHydrated, setIsHydrated] = useState(false);
+  const [newTenantName, setNewTenantName] = useState("");
+  const [switchingTenant, setSwitchingTenant] = useState(false);
+  const [creatingTenant, setCreatingTenant] = useState(false);
 
   const origin = typeof window === "undefined" ? "http://localhost:3000" : window.location.origin;
   const apiOrigin = useMemo(
@@ -416,6 +423,91 @@ export function WorkspaceConsole() {
     router.replace("/auth/login");
   }
 
+  async function switchTenant(tenantId: string) {
+    if (!session || tenantId === session.tenant.id) {
+      return;
+    }
+
+    setSwitchingTenant(true);
+    setNotice("");
+
+    try {
+      const response = await fetch(`${apiOrigin}/auth/switch-tenant`, {
+        method: "POST",
+        credentials: "include",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${session.token}`
+        },
+        body: JSON.stringify({ tenantId })
+      });
+
+      const payload = (await response.json()) as PlatformSession & { error?: string; message?: string };
+      if (!response.ok) {
+        throw new Error(payload.message ?? payload.error ?? "Could not switch tenant");
+      }
+
+      writePlatformSession(payload);
+      setSession(payload);
+      setState((current) => ({
+        ...current,
+        workspaceName: payload.tenant.name,
+        workspaceSlug: payload.tenant.slug,
+        tenantId: payload.tenant.id,
+        userId: payload.user.id,
+        audit: [makeAuditEvent("Tenant switched", `Active workspace changed to ${payload.tenant.name}.`), ...current.audit]
+      }));
+      setNotice(`Now working in ${payload.tenant.name}.`);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Could not switch tenant.");
+    } finally {
+      setSwitchingTenant(false);
+    }
+  }
+
+  async function createTenant() {
+    if (!session || !newTenantName.trim()) {
+      return;
+    }
+
+    setCreatingTenant(true);
+    setNotice("");
+
+    try {
+      const response = await fetch(`${apiOrigin}/auth/tenants`, {
+        method: "POST",
+        credentials: "include",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${session.token}`
+        },
+        body: JSON.stringify({ workspaceName: newTenantName.trim() })
+      });
+
+      const payload = (await response.json()) as PlatformSession & { error?: string; message?: string };
+      if (!response.ok) {
+        throw new Error(payload.message ?? payload.error ?? "Could not create tenant");
+      }
+
+      writePlatformSession(payload);
+      setSession(payload);
+      setState((current) => ({
+        ...current,
+        workspaceName: payload.tenant.name,
+        workspaceSlug: payload.tenant.slug,
+        tenantId: payload.tenant.id,
+        userId: payload.user.id,
+        audit: [makeAuditEvent("Tenant created", `${payload.tenant.name} was created and made active.`), ...current.audit]
+      }));
+      setNewTenantName("");
+      setNotice(`Created and switched to ${payload.tenant.name}.`);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Could not create tenant.");
+    } finally {
+      setCreatingTenant(false);
+    }
+  }
+
   const selected = state.connectors.find((connector) => connector.id === selectedConnector) ?? state.connectors[0];
 
   return (
@@ -439,8 +531,8 @@ export function WorkspaceConsole() {
               <span>Enabled tools</span>
             </div>
             <div className="stat-card">
-              <strong>1</strong>
-              <span>Tenant MCP endpoint</span>
+              <strong>{session?.tenants.length ?? 1}</strong>
+              <span>Accessible tenants</span>
             </div>
           </div>
           {notice ? <div className="notice">{notice}</div> : null}
@@ -461,7 +553,34 @@ export function WorkspaceConsole() {
               <span className="field-label">User ID</span>
               <input value={state.userId} readOnly />
             </label>
+            <div className="stack">
+              <span className="field-label">Active tenants</span>
+              <div className="chip-row">
+                {(session?.tenants ?? []).map((tenant) => (
+                  <button
+                    key={tenant.id}
+                    className={`chip tenant-chip ${tenant.id === state.tenantId ? "active" : ""}`}
+                    onClick={() => void switchTenant(tenant.id)}
+                    type="button"
+                    disabled={switchingTenant}
+                  >
+                    {tenant.name} · {tenant.role}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <label className="stack">
+              <span className="field-label">Create tenant</span>
+              <input
+                value={newTenantName}
+                onChange={(event) => setNewTenantName(event.target.value)}
+                placeholder="Add a new customer workspace"
+              />
+            </label>
             <div className="row">
+              <button className="button primary" onClick={() => void createTenant()} type="button" disabled={creatingTenant}>
+                {creatingTenant ? "Creating..." : "Create tenant"}
+              </button>
               <button className="button secondary" onClick={signOut} type="button">
                 Sign out
               </button>

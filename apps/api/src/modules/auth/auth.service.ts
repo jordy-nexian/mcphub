@@ -21,6 +21,12 @@ export interface PlatformSession {
     slug: string;
     name: string;
   };
+  tenants: Array<{
+    id: string;
+    slug: string;
+    name: string;
+    role: string;
+  }>;
 }
 
 export interface PlatformAuthContext {
@@ -90,6 +96,14 @@ type OAuthClientRow = {
   created_at: Date;
 };
 
+type TenantMembershipRow = {
+  user_id: string;
+  tenant_id: string;
+  role: string;
+  tenant_name: string;
+  tenant_slug: string;
+};
+
 export interface RegisteredOAuthClient {
   clientId: string;
   redirectUris: string[];
@@ -124,15 +138,15 @@ function verifyPassword(password: string, storedHash: string) {
 export class AuthService {
   private readonly ready = ensureDatabaseSchema();
 
-  private issuePlatformToken(user: UserRow) {
+  private issuePlatformToken(user: UserRow, tenantId = user.tenant_id, role = user.role) {
     return jwt.sign(
       {
         tokenType: "platform_session",
         userId: user.id,
-        tenantId: user.tenant_id,
+        tenantId,
         email: user.email,
         displayName: user.display_name,
-        role: user.role
+        role
       } satisfies PlatformAuthContext,
       config.sessionSecret,
       { expiresIn: "7d" }
@@ -159,17 +173,39 @@ export class AuthService {
     return tenant;
   }
 
-  private buildSession(user: UserRow, tenant: TenantRow): PlatformSession {
+  private async loadMemberships(userId: string) {
+    const result = await pool.query<TenantMembershipRow>(
+      `
+        SELECT tm.user_id, tm.tenant_id, tm.role, t.name AS tenant_name, t.slug AS tenant_slug
+        FROM tenant_memberships tm
+        INNER JOIN tenants t ON t.id = tm.tenant_id
+        WHERE tm.user_id = $1
+        ORDER BY t.name ASC
+      `,
+      [userId]
+    );
+
+    return result.rows.map((row) => ({
+      id: row.tenant_id,
+      slug: row.tenant_slug,
+      name: row.tenant_name,
+      role: row.role
+    }));
+  }
+
+  private async buildSession(user: UserRow, tenant: TenantRow, role = user.role): Promise<PlatformSession> {
+    const memberships = await this.loadMemberships(user.id);
     return {
-      token: this.issuePlatformToken(user),
+      token: this.issuePlatformToken(user, tenant.id, role),
       user: {
         id: user.id,
-        tenantId: user.tenant_id,
+        tenantId: tenant.id,
         email: user.email,
         displayName: user.display_name,
-        role: user.role
+        role
       },
-      tenant
+      tenant,
+      tenants: memberships
     };
   }
 
@@ -206,6 +242,14 @@ export class AuthService {
         [userId, tenantId, input.email.toLowerCase(), hashPassword(input.password), input.displayName, "OWNER"]
       );
 
+      await client.query(
+        `
+          INSERT INTO tenant_memberships (user_id, tenant_id, role, created_at)
+          VALUES ($1, $2, $3, NOW())
+        `,
+        [userId, tenantId, "OWNER"]
+      );
+
       await client.query("COMMIT");
     } catch (error) {
       await client.query("ROLLBACK");
@@ -220,7 +264,7 @@ export class AuthService {
       [userId]
     );
 
-    return this.buildSession(userResult.rows[0], tenant);
+    return this.buildSession(userResult.rows[0], tenant, "OWNER");
   }
 
   async login(email: string, password: string): Promise<PlatformSession> {
@@ -236,8 +280,14 @@ export class AuthService {
       throw new Error("Invalid email or password");
     }
 
-    const tenant = await this.loadTenant(user.tenant_id);
-    return this.buildSession(user, tenant);
+    const memberships = await this.loadMemberships(user.id);
+    const activeMembership = memberships.find((membership) => membership.id === user.tenant_id) ?? memberships[0];
+    if (!activeMembership) {
+      throw new Error("User is not assigned to a tenant");
+    }
+
+    const tenant = await this.loadTenant(activeMembership.id);
+    return this.buildSession(user, tenant, activeMembership.role);
   }
 
   async getSession(auth: PlatformAuthContext): Promise<PlatformSession> {
@@ -252,8 +302,14 @@ export class AuthService {
       throw new Error("User not found");
     }
 
-    const tenant = await this.loadTenant(user.tenant_id);
-    return this.buildSession(user, tenant);
+    const memberships = await this.loadMemberships(user.id);
+    const activeMembership = memberships.find((membership) => membership.id === auth.tenantId) ?? memberships[0];
+    if (!activeMembership) {
+      throw new Error("User is not assigned to a tenant");
+    }
+
+    const tenant = await this.loadTenant(activeMembership.id);
+    return this.buildSession(user, tenant, activeMembership.role);
   }
 
   verifyPlatformToken(token: string): PlatformAuthContext {
@@ -300,6 +356,85 @@ export class AuthService {
       throw new Error("Invalid refresh token");
     }
     return payload;
+  }
+
+  async listUserTenants(auth: PlatformAuthContext) {
+    await this.ready;
+    return this.loadMemberships(auth.userId);
+  }
+
+  async createTenantForUser(
+    auth: PlatformAuthContext,
+    input: {
+      workspaceName: string;
+    }
+  ) {
+    await this.ready;
+
+    const tenantId = crypto.randomUUID();
+    const baseSlug = slugifyWorkspaceName(input.workspaceName) || "workspace";
+    const uniqueSlug = `${baseSlug}-${tenantId.slice(0, 8)}`;
+
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      await client.query(
+        `
+          INSERT INTO tenants (id, slug, name, created_at, updated_at)
+          VALUES ($1, $2, $3, NOW(), NOW())
+        `,
+        [tenantId, uniqueSlug, input.workspaceName]
+      );
+
+      await client.query(
+        `
+          INSERT INTO tenant_memberships (user_id, tenant_id, role, created_at)
+          VALUES ($1, $2, $3, NOW())
+        `,
+        [auth.userId, tenantId, "OWNER"]
+      );
+
+      await client.query("COMMIT");
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+
+    const userResult = await pool.query<UserRow>(
+      `SELECT id, tenant_id, email, password_hash, display_name, role FROM platform_users WHERE id = $1 LIMIT 1`,
+      [auth.userId]
+    );
+    const user = userResult.rows[0];
+    if (!user) {
+      throw new Error("User not found");
+    }
+
+    const tenant = await this.loadTenant(tenantId);
+    return this.buildSession(user, tenant, "OWNER");
+  }
+
+  async switchTenant(auth: PlatformAuthContext, tenantId: string) {
+    await this.ready;
+
+    const memberships = await this.loadMemberships(auth.userId);
+    const membership = memberships.find((item) => item.id === tenantId);
+    if (!membership) {
+      throw new Error("You do not have access to that tenant");
+    }
+
+    const userResult = await pool.query<UserRow>(
+      `SELECT id, tenant_id, email, password_hash, display_name, role FROM platform_users WHERE id = $1 LIMIT 1`,
+      [auth.userId]
+    );
+    const user = userResult.rows[0];
+    if (!user) {
+      throw new Error("User not found");
+    }
+
+    const tenant = await this.loadTenant(tenantId);
+    return this.buildSession(user, tenant, membership.role);
   }
 
   async registerOAuthClient(input: {

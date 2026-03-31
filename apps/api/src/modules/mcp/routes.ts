@@ -70,6 +70,14 @@ const oauthRegistrationSchema = z.object({
   client_name: z.string().min(1).optional()
 });
 
+const createTenantSchema = z.object({
+  workspaceName: z.string().min(2)
+});
+
+const switchTenantSchema = z.object({
+  tenantId: z.string().min(1)
+});
+
 function parseBasicClientCredentials(authorizationHeader: string | undefined) {
   if (!authorizationHeader?.startsWith("Basic ")) {
     return undefined;
@@ -284,6 +292,41 @@ export function registerApiRoutes(
     }
 
     return deps.authService.getSession(auth);
+  });
+
+  app.get("/auth/tenants", async (request, reply) => {
+    const auth = parsePlatformAuthFromRequest(request, deps.authService);
+    if (!auth) {
+      return reply.status(401).send({ error: "unauthorized" });
+    }
+
+    return {
+      tenants: await deps.authService.listUserTenants(auth)
+    };
+  });
+
+  app.post("/auth/tenants", async (request, reply) => {
+    const auth = parsePlatformAuthFromRequest(request, deps.authService);
+    if (!auth) {
+      return reply.status(401).send({ error: "unauthorized" });
+    }
+
+    const body = createTenantSchema.parse(request.body);
+    const session = await deps.authService.createTenantForUser(auth, body);
+    reply.header("set-cookie", deps.authService.issueSessionCookie(session.token));
+    return session;
+  });
+
+  app.post("/auth/switch-tenant", async (request, reply) => {
+    const auth = parsePlatformAuthFromRequest(request, deps.authService);
+    if (!auth) {
+      return reply.status(401).send({ error: "unauthorized" });
+    }
+
+    const body = switchTenantSchema.parse(request.body);
+    const session = await deps.authService.switchTenant(auth, body.tenantId);
+    reply.header("set-cookie", deps.authService.issueSessionCookie(session.token));
+    return session;
   });
 
   app.get("/.well-known/oauth-authorization-server", async () => ({

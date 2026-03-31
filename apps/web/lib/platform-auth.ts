@@ -14,6 +14,12 @@ export interface PlatformSession {
     slug: string;
     name: string;
   };
+  tenants: Array<{
+    id: string;
+    slug: string;
+    name: string;
+    role: string;
+  }>;
 }
 
 const sessionStorageKey = "nexian-platform-session";
