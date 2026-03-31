@@ -82,6 +82,7 @@ const switchTenantSchema = z.object({
 
 const connectorConfigSchema = z.object({
   apiUrl: z.string().optional(),
+  authUrl: z.string().optional(),
   clientId: z.string().optional(),
   clientSecret: z.string().optional(),
   redirectUri: z.string().optional(),

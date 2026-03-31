@@ -20,6 +20,7 @@ type Connector = {
 
 type ConnectorConfig = {
   apiUrl: string;
+  authUrl: string;
   clientId: string;
   clientSecret: string;
   redirectUri: string;
@@ -357,6 +358,7 @@ export function WorkspaceConsole() {
               connector.id,
               {
                 apiUrl: payload.config.apiUrl ?? "",
+                authUrl: payload.config.authUrl ?? "",
                 clientId: payload.config.clientId ?? "",
                 clientSecret: "",
                 redirectUri: payload.config.redirectUri ?? "",
@@ -620,6 +622,7 @@ export function WorkspaceConsole() {
       [id]: {
         ...{
           apiUrl: "",
+          authUrl: "",
           clientId: "",
           clientSecret: "",
           redirectUri: "",
@@ -656,6 +659,7 @@ export function WorkspaceConsole() {
         },
         body: JSON.stringify({
           apiUrl: configEntry.apiUrl,
+          authUrl: configEntry.authUrl,
           clientId: configEntry.clientId,
           clientSecret: configEntry.clientSecret,
           redirectUri: configEntry.redirectUri,
@@ -671,6 +675,7 @@ export function WorkspaceConsole() {
 
       updateConnectorConfig(id, {
         apiUrl: payload.config?.apiUrl ?? configEntry.apiUrl,
+        authUrl: payload.config?.authUrl ?? configEntry.authUrl,
         clientId: payload.config?.clientId ?? configEntry.clientId,
         clientSecret: "",
         redirectUri: payload.config?.redirectUri ?? configEntry.redirectUri,
@@ -699,6 +704,7 @@ export function WorkspaceConsole() {
   const canManageTenants = hasPlatformConsoleAccess(session);
   const selectedConfig = connectorConfigs[selected.id] ?? {
     apiUrl: "",
+    authUrl: "",
     clientId: "",
     clientSecret: "",
     redirectUri: "",
@@ -894,6 +900,16 @@ export function WorkspaceConsole() {
                 }
               />
             </label>
+            {selected.id === "halopsa" ? (
+              <label className="stack">
+                <span className="field-label">Auth URL</span>
+                <input
+                  value={selectedConfig.authUrl}
+                  onChange={(event) => updateConnectorConfig(selected.id, { authUrl: event.target.value })}
+                  placeholder="Optional: https://yourhalo.example.com/auth"
+                />
+              </label>
+            ) : null}
             <label className="stack">
               <span className="field-label">
                 {selected.id === "n8n" ? "Workflow or project key" : "Client ID"}

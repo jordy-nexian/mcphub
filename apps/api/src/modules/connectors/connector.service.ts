@@ -23,6 +23,7 @@ type HaloGenericRecord = Record<string, unknown>;
 type ConnectorConfigInput = Record<string, unknown>;
 type StoredConnectorConfig = {
   apiUrl?: string;
+  authUrl?: string;
   clientId?: string;
   clientSecretEncrypted?: string;
   redirectUri?: string;
@@ -206,7 +207,7 @@ export class ConnectorService {
         state
       });
 
-      return { authorizationUrl: `${haloConfig.apiUrl}/auth/authorize?${params.toString()}` };
+      return { authorizationUrl: `${haloConfig.authUrl}/auth/authorize?${params.toString()}` };
     }
 
     const adapter = this.registry.get(provider);
@@ -351,6 +352,7 @@ export class ConnectorService {
           provider,
           config: {
             apiUrl: configJson.apiUrl ?? "",
+            authUrl: configJson.authUrl ?? "",
             clientId: configJson.clientId ?? "",
             redirectUri: configJson.redirectUri ?? process.env.HALOPSA_REDIRECT_URI ?? `${config.apiUrl}/oauth/halopsa/callback`,
             scopes: (configJson.scopes ?? this.getDefaultHaloScopes()).join(" "),
@@ -1275,6 +1277,24 @@ export class ConnectorService {
     return value?.replace(/\/$/, "");
   }
 
+  private normalizeHaloBaseUrl(value: string | undefined) {
+    const normalized = this.normalizeApiUrl(value);
+    if (!normalized) {
+      return normalized;
+    }
+
+    return normalized.replace(/\/auth(?:\/authorize|\/token)?$/i, "");
+  }
+
+  private normalizeHaloRedirectUri(value: string | undefined) {
+    const normalized = this.normalizeApiUrl(value);
+    if (!normalized) {
+      return undefined;
+    }
+
+    return normalized.endsWith("/oauth/halopsa/callback") ? normalized : `${normalized}/oauth/halopsa/callback`;
+  }
+
   private parseScopes(value: unknown, fallback: string[]) {
     if (Array.isArray(value)) {
       const scopes = value.map((item) => String(item).trim()).filter(Boolean);
@@ -1296,7 +1316,11 @@ export class ConnectorService {
   }
 
   private buildConnectorConfig(provider: ProviderName, input: ConnectorConfigInput, existing: StoredConnectorConfig = {}) {
-    const apiUrl = this.normalizeApiUrl(this.readOptionalString(input, "apiUrl")) ?? existing.apiUrl;
+    const rawApiUrl = this.readOptionalString(input, "apiUrl");
+    const apiUrl =
+      provider === "halopsa"
+        ? this.normalizeHaloBaseUrl(rawApiUrl) ?? this.normalizeHaloBaseUrl(existing.apiUrl)
+        : this.normalizeApiUrl(rawApiUrl) ?? existing.apiUrl;
     const clientId = this.readOptionalString(input, "clientId") ?? existing.clientId;
     const rawSecret = this.readOptionalString(input, "clientSecret");
     const clientSecretEncrypted = rawSecret ? this.encryption.encrypt(rawSecret) : existing.clientSecretEncrypted;
@@ -1305,13 +1329,15 @@ export class ConnectorService {
       case "halopsa":
         return {
           apiUrl,
+          authUrl:
+            this.normalizeHaloBaseUrl(this.readOptionalString(input, "authUrl"))
+            ?? this.normalizeHaloBaseUrl(existing.authUrl)
+            ?? apiUrl,
           clientId,
           clientSecretEncrypted,
-          redirectUri:
-            this.readOptionalString(input, "redirectUri") ??
-            existing.redirectUri ??
-            process.env.HALOPSA_REDIRECT_URI ??
-            `${config.apiUrl}/oauth/halopsa/callback`,
+          redirectUri: this.normalizeHaloRedirectUri(this.readOptionalString(input, "redirectUri") ?? existing.redirectUri)
+            ?? this.normalizeHaloRedirectUri(process.env.HALOPSA_REDIRECT_URI)
+            ?? `${config.apiUrl}/oauth/halopsa/callback`,
           scopes: this.parseScopes(input.scopes, existing.scopes ?? this.getDefaultHaloScopes())
         } satisfies StoredConnectorConfig;
       case "ninjaone":
@@ -1343,28 +1369,32 @@ export class ConnectorService {
 
   private getHaloBaseUrlForAccount(account: ConnectedAccountRecord) {
     const metadata = (account.metadataJson ?? {}) as StoredConnectorConfig;
-    const baseUrl = metadata.apiUrl ?? process.env.HALOPSA_BASE_URL ?? process.env.HALOPSA_URL;
+    const baseUrl = this.normalizeHaloBaseUrl(metadata.apiUrl ?? process.env.HALOPSA_BASE_URL ?? process.env.HALOPSA_URL);
     if (!baseUrl) {
       throw new Error("Set HaloPSA API URL in connector settings or HALOPSA_BASE_URL in the environment");
     }
 
-    return baseUrl.replace(/\/$/, "");
+    return baseUrl;
   }
 
   private async resolveHaloConfig(tenantId: string) {
     const stored = ((await this.configStore.get(tenantId, "halopsa"))?.configJson ?? {}) as StoredConnectorConfig;
-    const apiUrl = this.normalizeApiUrl(stored.apiUrl ?? process.env.HALOPSA_BASE_URL ?? process.env.HALOPSA_URL);
+    const apiUrl = this.normalizeHaloBaseUrl(stored.apiUrl ?? process.env.HALOPSA_BASE_URL ?? process.env.HALOPSA_URL);
+    const authUrl = this.normalizeHaloBaseUrl(stored.authUrl) ?? apiUrl;
     const clientId = stored.clientId ?? process.env.HALOPSA_CLIENT_ID;
     const clientSecret =
       stored.clientSecretEncrypted ? this.encryption.decrypt(stored.clientSecretEncrypted) : process.env.HALOPSA_CLIENT_SECRET;
-    const redirectUri = stored.redirectUri ?? process.env.HALOPSA_REDIRECT_URI ?? `${config.apiUrl}/oauth/halopsa/callback`;
+    const redirectUri =
+      this.normalizeHaloRedirectUri(stored.redirectUri)
+      ?? this.normalizeHaloRedirectUri(process.env.HALOPSA_REDIRECT_URI)
+      ?? `${config.apiUrl}/oauth/halopsa/callback`;
     const scopes = stored.scopes ?? this.getDefaultHaloScopes();
 
-    if (!apiUrl || !clientId || !clientSecret) {
+    if (!apiUrl || !authUrl || !clientId || !clientSecret) {
       throw new Error("HaloPSA requires API URL, client ID, and client secret in connector settings before connecting");
     }
 
-    return { apiUrl, clientId, clientSecret, redirectUri, scopes };
+    return { apiUrl, authUrl, clientId, clientSecret, redirectUri, scopes };
   }
 
   private async resolveN8nConfig(tenantId: string) {
@@ -1383,10 +1413,10 @@ export class ConnectorService {
   }
 
   private async exchangeHaloToken(
-    haloConfig: { apiUrl: string; clientId: string; clientSecret: string; redirectUri: string; scopes: string[] },
+    haloConfig: { apiUrl: string; authUrl: string; clientId: string; clientSecret: string; redirectUri: string; scopes: string[] },
     params: URLSearchParams
   ) {
-    const response = await haloFetch(`${haloConfig.apiUrl}/auth/token`, {
+    const response = await haloFetch(`${haloConfig.authUrl}/auth/token`, {
       method: "POST",
       headers: {
         "content-type": "application/x-www-form-urlencoded"
