@@ -207,10 +207,7 @@ export function WorkspaceConsole({
   const [state, setState] = useState<DemoState>(initialState);
   const [session, setSession] = useState<PlatformSession | null>(null);
   const [selectedConnector, setSelectedConnector] = useState("halopsa");
-  const [token, setToken] = useState("");
-  const [copied, setCopied] = useState("");
   const [notice, setNotice] = useState("");
-  const [loadingToken, setLoadingToken] = useState(false);
   const [isHydrated, setIsHydrated] = useState(false);
   const [newTenantName, setNewTenantName] = useState("");
   const [switchingTenant, setSwitchingTenant] = useState(false);
@@ -223,7 +220,6 @@ export function WorkspaceConsole({
     () => process.env.NEXT_PUBLIC_API_URL ?? origin.replace(":3000", ":4000"),
     [origin]
   );
-  const mcpUrl = process.env.NEXT_PUBLIC_MCP_URL ?? origin.replace(":3000", ":4100");
 
   useEffect(() => {
     const saved = window.localStorage.getItem(storageKey);
@@ -491,45 +487,6 @@ export function WorkspaceConsole({
       audit: [makeAuditEvent("Connector disconnected", `${connector.name} was disconnected from the backend store.`), ...current.audit]
     }));
     setNotice(`${connector.name} disconnected.`);
-  }
-
-  async function generateToken() {
-    if (!session) {
-      router.replace("/auth/login");
-      return;
-    }
-
-    setLoadingToken(true);
-    try {
-      const response = await fetch(`${apiOrigin}/auth/mcp-token`, {
-        method: "POST",
-        headers: {
-          "content-type": "application/json",
-          authorization: `Bearer ${session.token}`
-        }
-      });
-
-      if (!response.ok) {
-        throw new Error(`Failed to create MCP token (${response.status})`);
-      }
-
-      const payload = (await response.json()) as { token: string };
-      setToken(payload.token);
-      setState((current) => ({
-        ...current,
-        audit: [makeAuditEvent("MCP token issued", "A backend-signed MCP bearer token was generated for local testing."), ...current.audit]
-      }));
-    } catch (error) {
-      setNotice(error instanceof Error ? error.message : "Could not create MCP token.");
-    } finally {
-      setLoadingToken(false);
-    }
-  }
-
-  async function copy(value: string, label: string) {
-    await navigator.clipboard.writeText(value);
-    setCopied(label);
-    window.setTimeout(() => setCopied(""), 1500);
   }
 
   function signOut() {
@@ -1047,58 +1004,6 @@ export function WorkspaceConsole({
                   >
                     Disconnect
                   </button>
-                </div>
-              </div>
-            ))}
-          </div>
-        </article>
-        <article className="panel stack">
-          <div className="section-heading">
-            <div>
-              <span className="eyebrow">MCP Access</span>
-              <h2>Tenant endpoint</h2>
-            </div>
-          </div>
-          <div className="credential-card">
-            <span className="field-label">MCP URL</span>
-            <code>{mcpUrl}</code>
-            <button className="button secondary" onClick={() => void copy(mcpUrl, "url")} type="button">
-              {copied === "url" ? "Copied" : "Copy URL"}
-            </button>
-          </div>
-          <div className="credential-card">
-            <span className="field-label">Bearer token</span>
-            <code>{token || "Generate a backend-signed MCP token for local requests."}</code>
-            <div className="row">
-              <button className="button primary" onClick={() => void generateToken()} type="button" disabled={loadingToken}>
-                {loadingToken ? "Generating..." : "Generate token"}
-              </button>
-              {token ? (
-                <button className="button secondary" onClick={() => void copy(token, "token")} type="button">
-                  {copied === "token" ? "Copied" : "Copy token"}
-                </button>
-              ) : null}
-            </div>
-          </div>
-          <div className="notice">
-            Example header: <code>Authorization: Bearer &lt;token&gt;</code>
-          </div>
-        </article>
-
-        <article className="panel stack">
-          <div className="section-heading">
-            <div>
-              <span className="eyebrow">Audit Feed</span>
-              <h2>Recent activity</h2>
-            </div>
-          </div>
-          <div className="timeline">
-            {state.audit.map((event) => (
-              <div key={event.id} className="timeline-item">
-                <span className="timeline-time">{event.time}</span>
-                <div>
-                  <strong>{event.action}</strong>
-                  <p className="muted">{event.detail}</p>
                 </div>
               </div>
             ))}

@@ -56,6 +56,33 @@ export default function AuditPage() {
 
       {notice ? <div className="notice">{notice}</div> : null}
 
+      {!loading && events.length ? (
+        <section className="panel stack">
+          <div className="section-heading">
+            <div>
+              <span className="eyebrow">Recent Activity</span>
+              <h2>Latest workspace events</h2>
+            </div>
+          </div>
+          <div className="timeline">
+            {events.slice(0, 8).map((event) => (
+              <div key={event.id} className="timeline-item">
+                <span className="timeline-time">
+                  {new Date(event.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                </span>
+                <div>
+                  <strong>{event.action}</strong>
+                  <p className="muted">
+                    {event.targetType}
+                    {event.targetId ? ` · ${event.targetId}` : ""}
+                  </p>
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+      ) : null}
+
       <div className="data-table-wrapper">
         {loading ? (
           <div className="panel">Loading audit activity...</div>
