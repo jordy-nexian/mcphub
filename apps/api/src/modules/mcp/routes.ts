@@ -3,6 +3,8 @@ import crypto from "node:crypto";
 import type { FastifyReply, FastifyInstance } from "fastify";
 import { z } from "zod";
 
+import type { ProviderName } from "@nexian/core/domain/models";
+
 import type { AuditService } from "../audit/audit.service";
 import type { AuthService, PlatformAuthContext } from "../auth/auth.service";
 import type { ConnectorService } from "../connectors/connector.service";
@@ -78,6 +80,15 @@ const switchTenantSchema = z.object({
   tenantId: z.string().min(1)
 });
 
+const connectorConfigSchema = z.object({
+  apiUrl: z.string().optional(),
+  clientId: z.string().optional(),
+  clientSecret: z.string().optional(),
+  redirectUri: z.string().optional(),
+  scopes: z.union([z.string(), z.array(z.string())]).optional(),
+  tenantId: z.string().optional()
+});
+
 const createPlatformUserSchema = z.object({
   tenantId: z.string().min(1),
   email: z.string().email(),
@@ -106,7 +117,7 @@ function parseBasicClientCredentials(authorizationHeader: string | undefined) {
 function applyCors(reply: FastifyReply, origin: string) {
   reply.header("access-control-allow-origin", origin);
   reply.header("access-control-allow-headers", "content-type, authorization");
-  reply.header("access-control-allow-methods", "GET,POST,DELETE,OPTIONS");
+  reply.header("access-control-allow-methods", "GET,POST,PUT,DELETE,OPTIONS");
   reply.header("access-control-allow-credentials", "true");
 }
 
@@ -119,6 +130,10 @@ function parsePlatformAuth(
   }
 
   return authService.verifyPlatformToken(authorizationHeader.slice("Bearer ".length));
+}
+
+function parseProviderParam(request: { params: unknown }) {
+  return (request.params as { provider: ProviderName }).provider;
 }
 
 function parseCookies(cookieHeader: string | undefined) {
@@ -589,21 +604,21 @@ export function registerApiRoutes(
       return reply.status(401).send({ error: "unauthorized" });
     }
 
-    const provider = (request.params as { provider: "halopsa" | "microsoft365" | "hubspot" | "itglue" }).provider;
+    const provider = parseProviderParam(request);
     const body = z.object({ returnTo: z.string().url().optional() }).parse(request.body ?? {});
-    const result = deps.connectorService.beginOAuth(provider, auth.tenantId, auth.userId, body.returnTo);
+    const result = await deps.connectorService.beginOAuth(provider, auth.tenantId, auth.userId, body.returnTo);
     return { authorizationUrl: result.authorizationUrl };
   });
 
   app.get("/oauth/:provider/start", async (request, reply) => {
-    const provider = (request.params as { provider: "halopsa" | "microsoft365" | "hubspot" | "itglue" }).provider;
+    const provider = parseProviderParam(request);
     const query = oauthQuerySchema.parse(request.query);
-    const result = deps.connectorService.beginOAuth(provider, query.tenantId, query.userId, query.returnTo);
+    const result = await deps.connectorService.beginOAuth(provider, query.tenantId, query.userId, query.returnTo);
     return reply.redirect(result.authorizationUrl);
   });
 
   app.get("/oauth/:provider/callback", async (request, reply) => {
-    const provider = (request.params as { provider: "halopsa" | "microsoft365" | "hubspot" | "itglue" }).provider;
+    const provider = parseProviderParam(request);
     const query = oauthCallbackSchema.parse(request.query);
     const result = await deps.connectorService.finishOAuth(provider, query.code, query.state);
     return reply.redirect(
@@ -617,9 +632,30 @@ export function registerApiRoutes(
       return reply.status(401).send({ error: "unauthorized" });
     }
 
-    const provider = (request.params as { provider: "halopsa" | "microsoft365" | "hubspot" | "itglue" }).provider;
+    const provider = parseProviderParam(request);
     await deps.connectorService.disconnect(provider, auth.tenantId, auth.userId);
     return { ok: true };
+  });
+
+  app.get("/connector-config/:provider", async (request, reply) => {
+    const auth = parsePlatformAuth(request.headers.authorization, deps.authService);
+    if (!auth) {
+      return reply.status(401).send({ error: "unauthorized" });
+    }
+
+    const provider = parseProviderParam(request);
+    return deps.connectorService.getConnectorConfig(auth.tenantId, provider);
+  });
+
+  app.put("/connector-config/:provider", async (request, reply) => {
+    const auth = parsePlatformAuth(request.headers.authorization, deps.authService);
+    if (!auth) {
+      return reply.status(401).send({ error: "unauthorized" });
+    }
+
+    const provider = parseProviderParam(request);
+    const body = connectorConfigSchema.parse(request.body ?? {});
+    return deps.connectorService.saveConnectorConfig(auth.tenantId, auth.userId, provider, body);
   });
 
   app.post("/auth/mcp-token", async (request, reply) => {

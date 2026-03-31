@@ -151,6 +151,22 @@ export async function ensureDatabaseSchema() {
       `);
 
       await pool.query(`
+        CREATE TABLE IF NOT EXISTS connector_configs (
+          tenant_id TEXT NOT NULL,
+          provider TEXT NOT NULL,
+          config_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          PRIMARY KEY (tenant_id, provider)
+        );
+      `);
+
+      await pool.query(`
+        CREATE INDEX IF NOT EXISTS connector_configs_tenant_idx
+        ON connector_configs (tenant_id);
+      `);
+
+      await pool.query(`
         CREATE TABLE IF NOT EXISTS audit_events (
           id TEXT PRIMARY KEY,
           tenant_id TEXT NOT NULL,
