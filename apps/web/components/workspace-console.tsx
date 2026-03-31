@@ -9,13 +9,23 @@ type Connector = {
   id: string;
   name: string;
   category: string;
-  auth: "OAuth 2.0" | "API key";
+  auth: "OAuth 2.0" | "API key" | "Bearer token";
   status: "Connected" | "Needs consent" | "Disconnected";
   description: string;
   lastSync: string;
   tools: string[];
   lastError?: string;
   realOAuth?: boolean;
+};
+
+type ConnectorConfig = {
+  apiUrl: string;
+  clientId: string;
+  clientSecret: string;
+  redirectUri: string;
+  scopes: string;
+  tenantId: string;
+  hasClientSecret: boolean;
 };
 
 type Permission = {
@@ -108,6 +118,36 @@ const initialState: DemoState = {
       description: "Knowledge base, device, and documentation lookup.",
       lastSync: "Not connected",
       tools: ["search_documents", "list_devices_for_site"]
+    },
+    {
+      id: "ninjaone",
+      name: "NinjaOne",
+      category: "RMM",
+      auth: "API key",
+      status: "Disconnected",
+      description: "Managed device, scripting, and endpoint context for MSP operations.",
+      lastSync: "Not configured",
+      tools: ["list_devices_for_site", "search_documents", "find_contact"]
+    },
+    {
+      id: "cipp",
+      name: "CIPP",
+      category: "Microsoft 365 tenancy",
+      auth: "API key",
+      status: "Disconnected",
+      description: "Cross-tenant Microsoft 365 administration and operational context.",
+      lastSync: "Not configured",
+      tools: ["find_contact", "search_documents", "search_projects"]
+    },
+    {
+      id: "n8n",
+      name: "n8n",
+      category: "Workflow automation",
+      auth: "Bearer token",
+      status: "Disconnected",
+      description: "Workflow boxes, webhook execution history, and API-driven automation runs for linked customer flows.",
+      lastSync: "Not configured",
+      tools: ["list_workflows", "get_workflow", "list_executions", "get_execution", "trigger_webhook"]
     }
   ],
   permissions: [
@@ -123,12 +163,18 @@ const initialState: DemoState = {
     { tool: "list_devices_for_site", roles: ["Owner", "Admin", "Analyst", "User"], enabled: true },
     { tool: "get_recent_invoices", roles: ["Owner", "Admin"], enabled: true },
     { tool: "create_draft_ticket", roles: ["Owner", "Admin"], enabled: true },
-    { tool: "add_internal_note", roles: ["Owner", "Admin"], enabled: false }
+    { tool: "add_internal_note", roles: ["Owner", "Admin"], enabled: false },
+    { tool: "list_workflows", roles: ["Owner", "Admin", "Analyst"], enabled: true },
+    { tool: "get_workflow", roles: ["Owner", "Admin", "Analyst"], enabled: true },
+    { tool: "list_executions", roles: ["Owner", "Admin", "Analyst"], enabled: true },
+    { tool: "get_execution", roles: ["Owner", "Admin", "Analyst"], enabled: true },
+    { tool: "trigger_webhook", roles: ["Owner", "Admin"], enabled: true }
   ],
   audit: [
     { id: "a1", time: "10:22", action: "Connector updated", detail: "HaloPSA now uses the real API authorization route." },
     { id: "a2", time: "10:17", action: "Tool invoked", detail: "list_open_tickets called for tenant nexian-legal-ops." },
-    { id: "a3", time: "10:01", action: "Policy reviewed", detail: "Safe write tools limited to Owner and Admin roles." }
+    { id: "a3", time: "10:01", action: "Policy reviewed", detail: "Safe write tools limited to Owner and Admin roles." },
+    { id: "a4", time: "09:48", action: "Workflow execution synced", detail: "n8n execution telemetry is ready to be linked into the MCP dashboard." }
   ]
 };
 
@@ -159,7 +205,6 @@ export function WorkspaceConsole() {
   const router = useRouter();
   const [state, setState] = useState<DemoState>(initialState);
   const [session, setSession] = useState<PlatformSession | null>(null);
-  const [apiKey, setApiKey] = useState("");
   const [selectedConnector, setSelectedConnector] = useState("halopsa");
   const [token, setToken] = useState("");
   const [copied, setCopied] = useState("");
@@ -169,6 +214,8 @@ export function WorkspaceConsole() {
   const [newTenantName, setNewTenantName] = useState("");
   const [switchingTenant, setSwitchingTenant] = useState(false);
   const [creatingTenant, setCreatingTenant] = useState(false);
+  const [connectorConfigs, setConnectorConfigs] = useState<Record<string, ConnectorConfig>>({});
+  const [savingConfigId, setSavingConfigId] = useState("");
 
   const origin = typeof window === "undefined" ? "http://localhost:3000" : window.location.origin;
   const apiOrigin = useMemo(
@@ -284,6 +331,61 @@ export function WorkspaceConsole() {
     void loadProviders();
   }, [apiOrigin, isHydrated, session]);
 
+  useEffect(() => {
+    if (!session) {
+      return;
+    }
+
+    const sessionToken = session.token;
+
+    async function loadConnectorConfigs() {
+      try {
+        const entries = await Promise.all(
+          initialState.connectors.map(async (connector) => {
+            const response = await fetch(`${apiOrigin}/connector-config/${connector.id}`, {
+              headers: {
+                authorization: `Bearer ${sessionToken}`
+              }
+            });
+
+            if (!response.ok) {
+              throw new Error(`Failed to load ${connector.name} settings`);
+            }
+
+            const payload = (await response.json()) as { config: Partial<ConnectorConfig> };
+            return [
+              connector.id,
+              {
+                apiUrl: payload.config.apiUrl ?? "",
+                clientId: payload.config.clientId ?? "",
+                clientSecret: "",
+                redirectUri: payload.config.redirectUri ?? "",
+                scopes: payload.config.scopes ?? "",
+                tenantId: payload.config.tenantId ?? "",
+                hasClientSecret: Boolean(payload.config.hasClientSecret)
+              }
+            ] as const;
+          })
+        );
+
+        const nextConfigs = Object.fromEntries(entries);
+        setConnectorConfigs(nextConfigs);
+        setState((current) => ({
+          ...current,
+          connectors: current.connectors.map((connector) =>
+            nextConfigs[connector.id]?.apiUrl && connector.status !== "Connected"
+              ? { ...connector, lastSync: "Configuration saved" }
+              : connector
+          )
+        }));
+      } catch (error) {
+        setNotice(error instanceof Error ? error.message : "Unable to load connector configuration.");
+      }
+    }
+
+    void loadConnectorConfigs();
+  }, [apiOrigin, session]);
+
   const connectedCount = state.connectors.filter((connector) => connector.status === "Connected").length;
 
   function togglePermission(tool: string) {
@@ -302,9 +404,17 @@ export function WorkspaceConsole() {
       return;
     }
 
+    setSelectedConnector(id);
+
     if (connector.id === "halopsa") {
       if (!session) {
         router.replace("/auth/login");
+        return;
+      }
+
+      const configEntry = connectorConfigs.halopsa;
+      if (!configEntry?.apiUrl || !configEntry?.clientId || (!configEntry.clientSecret && !configEntry.hasClientSecret)) {
+        setNotice("Save the HaloPSA API URL, client ID, and client secret in Connector Setup before starting OAuth.");
         return;
       }
 
@@ -329,16 +439,12 @@ export function WorkspaceConsole() {
       return;
     }
 
-    if (connector.auth === "API key") {
-      setNotice("API-key-backed connectors still need backend persistence. HaloPSA OAuth is the first live path.");
-      setState((current) => ({
-        ...current,
-        audit: [makeAuditEvent("API key pending", `${connector.name} is still using scaffold-only onboarding.`), ...current.audit]
-      }));
+    if (connector.id === "n8n") {
+      setNotice("n8n is ready to configure. Save the API URL and bearer token, then we can wire workflow and execution reads against your n8n instance.");
       return;
     }
 
-    setNotice(`${connector.name} is still scaffolded. HaloPSA is the first real OAuth connector.`);
+    setNotice(`${connector.name} is ready to configure in the setup panel. Live auth and token exchange are still to be wired.`);
   }
 
   async function disconnectConnector(id: string) {
@@ -508,7 +614,97 @@ export function WorkspaceConsole() {
     }
   }
 
+  function updateConnectorConfig(id: string, patch: Partial<ConnectorConfig>) {
+    setConnectorConfigs((current) => ({
+      ...current,
+      [id]: {
+        ...{
+          apiUrl: "",
+          clientId: "",
+          clientSecret: "",
+          redirectUri: "",
+          scopes: "",
+          tenantId: "",
+          hasClientSecret: false
+        },
+        ...current[id],
+        ...patch
+      }
+    }));
+  }
+
+  async function saveConnectorConfig(id: string) {
+    if (!session) {
+      router.replace("/auth/login");
+      return;
+    }
+
+    const configEntry = connectorConfigs[id];
+    if (!configEntry) {
+      return;
+    }
+
+    setSavingConfigId(id);
+    setNotice("");
+
+    try {
+      const response = await fetch(`${apiOrigin}/connector-config/${id}`, {
+        method: "PUT",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${session.token}`
+        },
+        body: JSON.stringify({
+          apiUrl: configEntry.apiUrl,
+          clientId: configEntry.clientId,
+          clientSecret: configEntry.clientSecret,
+          redirectUri: configEntry.redirectUri,
+          scopes: configEntry.scopes,
+          tenantId: configEntry.tenantId
+        })
+      });
+
+      const payload = (await response.json()) as { config?: Partial<ConnectorConfig>; error?: string; message?: string };
+      if (!response.ok) {
+        throw new Error(payload.message ?? payload.error ?? `Failed to save ${id} settings`);
+      }
+
+      updateConnectorConfig(id, {
+        apiUrl: payload.config?.apiUrl ?? configEntry.apiUrl,
+        clientId: payload.config?.clientId ?? configEntry.clientId,
+        clientSecret: "",
+        redirectUri: payload.config?.redirectUri ?? configEntry.redirectUri,
+        scopes: payload.config?.scopes ?? configEntry.scopes,
+        tenantId: payload.config?.tenantId ?? configEntry.tenantId,
+        hasClientSecret: Boolean(payload.config?.hasClientSecret)
+      });
+
+      const connectorName = state.connectors.find((connector) => connector.id === id)?.name ?? id;
+      setState((current) => ({
+        ...current,
+        connectors: current.connectors.map((connector) =>
+          connector.id === id ? { ...connector, lastSync: "Configuration saved" } : connector
+        ),
+        audit: [makeAuditEvent("Connector config saved", `${connectorName} settings were updated.`), ...current.audit]
+      }));
+      setNotice(`${connectorName} settings saved.`);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Could not save connector settings.");
+    } finally {
+      setSavingConfigId("");
+    }
+  }
+
   const selected = state.connectors.find((connector) => connector.id === selectedConnector) ?? state.connectors[0];
+  const selectedConfig = connectorConfigs[selected.id] ?? {
+    apiUrl: "",
+    clientId: "",
+    clientSecret: "",
+    redirectUri: "",
+    scopes: "",
+    tenantId: "",
+    hasClientSecret: false
+  };
 
   return (
     <div className="console stack">
@@ -519,7 +715,8 @@ export function WorkspaceConsole() {
           <p className="muted hero-text">
             HaloPSA now uses the real authorization-code route and exposes the expanded Nexian MCP surface for tickets,
             actions, projects, contacts, knowledge, assets, invoices, and guarded writes. The other connectors remain
-            scaffolded until we wire their provider-specific token exchange and storage paths.
+            scaffolded until we wire their provider-specific token exchange and storage paths. n8n is included for
+            workflow boxes, execution history, and webhook-triggered automation runs.
           </p>
           <div className="stats-grid">
             <div className="stat-card">
@@ -623,7 +820,7 @@ export function WorkspaceConsole() {
                 {connector.id === "halopsa" ? <p className="connector-meta">{connector.tools.length} MCP tools available</p> : null}
                 <div className="row">
                   <button className="button primary" onClick={() => connectConnector(connector.id)} type="button">
-                    {connector.id === "halopsa" ? "Connect with HaloPSA" : connector.auth === "API key" ? "Save API key" : "Coming next"}
+                    {connector.id === "halopsa" ? "Connect with HaloPSA" : "Configure"}
                   </button>
                   <button className="button secondary" onClick={() => void disconnectConnector(connector.id)} type="button">
                     Disconnect
@@ -657,7 +854,9 @@ export function WorkspaceConsole() {
             <p className="connector-meta">
               {selected.id === "halopsa"
                 ? "Live MCP tools: customer lookup, ticketing, action history, project search, contacts, documents, site devices, invoices, and guarded writes."
-                : "Displayed tools are the current scaffold surface for this provider."}
+                : selected.id === "n8n"
+                  ? "n8n is set up for workflow catalog, execution lookups, and webhook-triggered automation runs across linked boxes."
+                : "Configuration is stored per tenant so each customer can have its own connector settings."}
             </p>
             <div className="chip-row">
               {selected.tools.map((tool) => (
@@ -667,21 +866,107 @@ export function WorkspaceConsole() {
               ))}
             </div>
           </div>
-          {selected.auth === "API key" ? (
+          <div className="field-grid">
             <label className="stack">
-              <span className="field-label">Provider API key</span>
-              <input value={apiKey} onChange={(event) => setApiKey(event.target.value)} placeholder="Backend API-key storage is next to wire." />
+              <span className="field-label">API URL</span>
+              <input
+                value={selectedConfig.apiUrl}
+                onChange={(event) => updateConnectorConfig(selected.id, { apiUrl: event.target.value })}
+                placeholder={
+                  selected.id === "halopsa"
+                    ? "https://yourhalo.example.com"
+                    : selected.id === "ninjaone"
+                      ? "https://app.ninjarmm.com"
+                      : selected.id === "n8n"
+                        ? "https://n8n.example.com/api/v1"
+                      : "https://cipp.example.com"
+                }
+              />
             </label>
-          ) : (
-            <div className="notice">
-              {selected.id === "halopsa"
-                ? "HaloPSA is now wired to the API authorization-code route and the expanded MCP tool catalog. Set HALOPSA_BASE_URL, HALOPSA_CLIENT_ID, HALOPSA_CLIENT_SECRET, and HALOPSA_REDIRECT_URI before connecting."
-                : "This provider still uses scaffold logic. HaloPSA is the only live OAuth path in this build."}
-            </div>
-          )}
+            <label className="stack">
+              <span className="field-label">
+                {selected.id === "n8n" ? "Workflow or project key" : "Client ID"}
+              </span>
+              <input
+                value={selectedConfig.clientId}
+                onChange={(event) => updateConnectorConfig(selected.id, { clientId: event.target.value })}
+                placeholder={
+                  selected.id === "n8n"
+                    ? "Optional: default workflow or project identifier"
+                    : "Enter the application client ID"
+                }
+              />
+            </label>
+            {selected.id === "halopsa" || selected.id === "n8n" ? (
+              <label className="stack">
+                <span className="field-label">
+                  {selected.id === "n8n" ? "Webhook base URL" : "Redirect URI"}
+                </span>
+                <input
+                  value={selectedConfig.redirectUri}
+                  onChange={(event) => updateConnectorConfig(selected.id, { redirectUri: event.target.value })}
+                  placeholder={
+                    selected.id === "n8n"
+                      ? "https://n8n.example.com/webhook"
+                      : "https://api.example.com/oauth/halopsa/callback"
+                  }
+                />
+              </label>
+            ) : null}
+            {selected.id === "halopsa" || selected.id === "ninjaone" ? (
+              <label className="stack">
+                <span className="field-label">Scopes</span>
+                <input
+                  value={selectedConfig.scopes}
+                  onChange={(event) => updateConnectorConfig(selected.id, { scopes: event.target.value })}
+                  placeholder="scope-one scope-two"
+                />
+              </label>
+            ) : null}
+            {selected.id === "cipp" ? (
+              <label className="stack">
+                <span className="field-label">Tenant ID</span>
+                <input
+                  value={selectedConfig.tenantId}
+                  onChange={(event) => updateConnectorConfig(selected.id, { tenantId: event.target.value })}
+                  placeholder="Microsoft 365 tenant ID"
+                />
+              </label>
+            ) : null}
+          </div>
+          <label className="stack">
+            <span className="field-label">
+              {selected.id === "n8n" ? "Bearer token / API key" : "Client secret"}
+            </span>
+            <input
+              type="password"
+              value={selectedConfig.clientSecret}
+              onChange={(event) => updateConnectorConfig(selected.id, { clientSecret: event.target.value })}
+              placeholder={
+                selectedConfig.hasClientSecret
+                  ? "Saved already. Enter a new secret to replace it."
+                  : selected.id === "n8n"
+                    ? "Enter the n8n bearer token or API key"
+                    : "Enter the client secret"
+              }
+            />
+          </label>
+          <div className="connector-meta">
+            {selectedConfig.hasClientSecret ? "A secret is already saved for this connector." : "No secret saved yet."}
+          </div>
+          <div className="notice">
+            {selected.id === "halopsa"
+              ? "HaloPSA now prefers the per-tenant settings saved here, then falls back to environment variables if needed."
+              : selected.id === "n8n"
+                ? "Save your n8n base API URL, optional workflow key, bearer token, and webhook base URL here so workflow listings and execution history can be linked into the Nexian API."
+              : `${selected.name} can now be added per tenant from this screen. Live token exchange and tool execution can be wired next on the same pattern as HaloPSA.`}
+          </div>
           <div className="row">
+            <button className="button secondary" onClick={() => void saveConnectorConfig(selected.id)} type="button" disabled={savingConfigId === selected.id}>
+              {savingConfigId === selected.id ? "Saving..." : "Save settings"}
+            </button>
             <button className="button primary" onClick={() => connectConnector(selected.id)} type="button">
-              {selected.id === "halopsa" ? "Start HaloPSA OAuth" : "Use selected connector"}
+              {selected.id === "halopsa" ? "Start HaloPSA OAuth" : selected.id === "n8n" ? "Link n8n workspace" : "Use selected connector"}
             </button>
           </div>
         </article>

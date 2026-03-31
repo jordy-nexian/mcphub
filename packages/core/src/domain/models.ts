@@ -1,4 +1,4 @@
-export type ProviderName = "halopsa" | "microsoft365" | "hubspot" | "itglue";
+export type ProviderName = "halopsa" | "microsoft365" | "hubspot" | "itglue" | "ninjaone" | "cipp" | "n8n";
 
 export interface AuthContext {
   tenantId: string;
@@ -34,4 +34,3 @@ export interface ToolExecutionContext extends AuthContext {
   requestId: string;
   accountId: string;
 }
-

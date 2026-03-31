@@ -5,7 +5,7 @@ export const demoTenants = [
     slug: "legal-ops-co",
     status: "active" as const,
     userCount: 8,
-    connectorCount: 3,
+    connectorCount: 4,
     createdAt: "2026-01-15"
   },
   {
@@ -14,7 +14,7 @@ export const demoTenants = [
     slug: "meridian-it",
     status: "active" as const,
     userCount: 12,
-    connectorCount: 4,
+    connectorCount: 5,
     createdAt: "2026-01-28"
   },
   {
@@ -23,7 +23,7 @@ export const demoTenants = [
     slug: "apex-consulting",
     status: "active" as const,
     userCount: 5,
-    connectorCount: 2,
+    connectorCount: 3,
     createdAt: "2026-02-10"
   }
 ];
@@ -39,24 +39,33 @@ export const demoUsers = [
 export const demoGlobalConnectors = [
   { id: "halopsa", name: "HaloPSA", category: "Service desk", status: "Connected" as const, tenantId: "t-001", tenantName: "Legal Ops Co", lastSync: "5 min ago", tools: ["find_customer", "list_open_tickets", "get_ticket"] },
   { id: "microsoft365", name: "Microsoft 365", category: "Documents", status: "Connected" as const, tenantId: "t-001", tenantName: "Legal Ops Co", lastSync: "18 min ago", tools: ["search_documents", "find_contact"] },
+  { id: "n8n", name: "n8n", category: "Workflow automation", status: "Connected" as const, tenantId: "t-001", tenantName: "Legal Ops Co", lastSync: "45 sec ago", tools: ["list_workflows", "list_executions", "trigger_webhook"] },
   { id: "halopsa", name: "HaloPSA", category: "Service desk", status: "Connected" as const, tenantId: "t-002", tenantName: "Meridian IT Services", lastSync: "2 min ago", tools: ["find_customer", "list_open_tickets"] },
   { id: "hubspot", name: "HubSpot CRM", category: "CRM", status: "Connected" as const, tenantId: "t-002", tenantName: "Meridian IT Services", lastSync: "1 hr ago", tools: ["find_contact"] },
-  { id: "microsoft365", name: "Microsoft 365", category: "Documents", status: "Needs consent" as const, tenantId: "t-003", tenantName: "Apex Consulting", lastSync: "Pending", tools: ["search_documents"] }
+  { id: "microsoft365", name: "Microsoft 365", category: "Documents", status: "Connected" as const, tenantId: "t-002", tenantName: "Meridian IT Services", lastSync: "11 min ago", tools: ["search_documents"] },
+  { id: "n8n", name: "n8n", category: "Workflow automation", status: "Connected" as const, tenantId: "t-002", tenantName: "Meridian IT Services", lastSync: "2 min ago", tools: ["list_workflows", "get_execution", "trigger_webhook"] },
+  { id: "microsoft365", name: "Microsoft 365", category: "Documents", status: "Needs consent" as const, tenantId: "t-003", tenantName: "Apex Consulting", lastSync: "Pending", tools: ["search_documents"] },
+  { id: "n8n", name: "n8n", category: "Workflow automation", status: "Connected" as const, tenantId: "t-003", tenantName: "Apex Consulting", lastSync: "8 min ago", tools: ["list_workflows", "list_executions", "get_execution"] }
 ];
 
 export const demoAuditEvents = [
+  { id: "ae-00", time: "10:44", action: "Workflow execution succeeded", detail: "n8n workflow Incident Triage completed from a webhook trigger.", tenantName: "Legal Ops Co", actor: "n8n" },
   { id: "ae-01", time: "10:42", action: "Tool invoked", detail: "list_open_tickets called for tenant legal-ops-co.", tenantName: "Legal Ops Co", actor: "Sarah Chen" },
   { id: "ae-02", time: "10:38", action: "Connector connected", detail: "HaloPSA completed OAuth successfully.", tenantName: "Legal Ops Co", actor: "Sarah Chen" },
   { id: "ae-03", time: "10:30", action: "Policy updated", detail: "create_draft_ticket restricted to Owner and Admin roles.", tenantName: "Legal Ops Co", actor: "Nexian Admin" },
   { id: "ae-04", time: "10:22", action: "MCP token issued", detail: "Bearer token generated for testing.", tenantName: "Meridian IT Services", actor: "Mike Thompson" },
   { id: "ae-05", time: "10:15", action: "Connector connected", detail: "HubSpot CRM OAuth completed.", tenantName: "Meridian IT Services", actor: "Rachel Green" },
-  { id: "ae-06", time: "09:45", action: "Token refresh failed", detail: "Microsoft 365 refresh token expired.", tenantName: "Apex Consulting", actor: "System" }
+  { id: "ae-06", time: "09:45", action: "Token refresh failed", detail: "Microsoft 365 refresh token expired.", tenantName: "Apex Consulting", actor: "System" },
+  { id: "ae-07", time: "09:12", action: "Webhook received", detail: "n8n accepted a new-client onboarding payload and queued workflow execution.", tenantName: "Meridian IT Services", actor: "System" }
 ];
 
 export const demoPermissions = [
   { tool: "list_open_tickets", roles: ["Owner", "Admin", "Analyst", "User"], enabled: true },
   { tool: "search_documents", roles: ["Owner", "Admin", "Analyst", "User"], enabled: true },
   { tool: "find_customer", roles: ["Owner", "Admin", "Analyst"], enabled: true },
+  { tool: "list_workflows", roles: ["Owner", "Admin", "Analyst"], enabled: true },
+  { tool: "get_execution", roles: ["Owner", "Admin", "Analyst"], enabled: true },
+  { tool: "trigger_webhook", roles: ["Owner", "Admin"], enabled: true },
   { tool: "create_draft_ticket", roles: ["Owner", "Admin"], enabled: true },
   { tool: "add_internal_note", roles: ["Owner", "Admin"], enabled: false }
 ];

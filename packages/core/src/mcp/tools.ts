@@ -11,6 +11,11 @@ export const toolNames = [
   "find_contact",
   "search_documents",
   "list_devices_for_site",
+  "list_workflows",
+  "get_workflow",
+  "list_executions",
+  "get_execution",
+  "trigger_webhook",
   "get_recent_invoices",
   "create_draft_ticket",
   "add_internal_note"

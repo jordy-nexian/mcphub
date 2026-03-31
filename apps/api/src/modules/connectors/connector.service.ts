@@ -9,6 +9,7 @@ import { TokenEncryptionService } from "@nexian/core/security/encryption";
 
 import { buildAppConfig } from "../../common/config/env";
 import { createOAuthState, verifyOAuthState } from "../../common/security/oauth-state";
+import { ConnectorConfigStore } from "../../common/store/connector-config.store";
 import { ConnectedAccountStore } from "../../common/store/connected-account.store";
 import type { AuditService } from "../audit/audit.service";
 
@@ -19,15 +20,17 @@ const config = buildAppConfig();
 type HaloTicketRecord = Record<string, unknown>;
 type HaloClientRecord = Record<string, unknown>;
 type HaloGenericRecord = Record<string, unknown>;
-
-function getHaloBaseUrl() {
-  const value = process.env.HALOPSA_BASE_URL ?? process.env.HALOPSA_URL;
-  if (!value) {
-    throw new Error("Set HALOPSA_BASE_URL in your environment to your HaloPSA instance URL");
-  }
-
-  return value.replace(/\/$/, "");
-}
+type ConnectorConfigInput = Record<string, unknown>;
+type StoredConnectorConfig = {
+  apiUrl?: string;
+  clientId?: string;
+  clientSecretEncrypted?: string;
+  redirectUri?: string;
+  scopes?: string[];
+  tenantId?: string;
+  appId?: string;
+  webhookBaseUrl?: string;
+};
 
 function pickString(record: Record<string, unknown>, keys: string[]) {
   for (const key of keys) {
@@ -163,6 +166,7 @@ export class ConnectorService {
     : undefined;
   private readonly refreshService = new TokenRefreshService(this.redis, this.encryption);
   private readonly store = ConnectedAccountStore.createDefault();
+  private readonly configStore = ConnectorConfigStore.createDefault();
 
   constructor(private readonly auditService: AuditService) {
     this.redis?.on("error", (error) => {
@@ -187,7 +191,21 @@ export class ConnectorService {
     });
   }
 
-  beginOAuth(provider: ProviderName, tenantId: string, userId: string, returnTo?: string) {
+  async beginOAuth(provider: ProviderName, tenantId: string, userId: string, returnTo?: string) {
+    if (provider === "halopsa") {
+      const haloConfig = await this.resolveHaloConfig(tenantId);
+      const state = createOAuthState({ provider, tenantId, userId, returnTo }, config.oauthStateSigningSecret);
+      const params = new URLSearchParams({
+        client_id: haloConfig.clientId,
+        redirect_uri: haloConfig.redirectUri,
+        response_type: "code",
+        scope: haloConfig.scopes.join(" "),
+        state
+      });
+
+      return { authorizationUrl: `${haloConfig.apiUrl}/auth/authorize?${params.toString()}` };
+    }
+
     const adapter = this.registry.get(provider);
     if (!adapter?.supportsOAuth || !adapter.getAuthorizationUrl) {
       throw new Error(`Provider ${provider} does not support OAuth`);
@@ -198,6 +216,62 @@ export class ConnectorService {
   }
 
   async finishOAuth(provider: ProviderName, code: string, state: string) {
+    if (provider === "halopsa") {
+      const payload = verifyOAuthState(state, config.oauthStateSigningSecret);
+      const haloConfig = await this.resolveHaloConfig(payload.tenantId);
+      const tokens = await this.exchangeHaloToken(
+        haloConfig,
+        new URLSearchParams({
+          grant_type: "authorization_code",
+          client_id: haloConfig.clientId,
+          client_secret: haloConfig.clientSecret,
+          code,
+          redirect_uri: haloConfig.redirectUri
+        })
+      );
+      const now = new Date();
+      const account: ConnectedAccountRecord = {
+        id: crypto.randomUUID(),
+        tenantId: payload.tenantId,
+        userId: payload.userId,
+        provider,
+        providerAccountId: payload.userId,
+        accessTokenEncrypted: this.encryption.encrypt(tokens.accessToken),
+        refreshTokenEncrypted: tokens.refreshToken ? this.encryption.encrypt(tokens.refreshToken) : undefined,
+        expiresAt: tokens.expiresAt,
+        scopes: tokens.scopes ?? haloConfig.scopes,
+        metadataJson: {
+          connectedVia: "oauth_authorization_code",
+          apiUrl: haloConfig.apiUrl,
+          clientId: haloConfig.clientId,
+          redirectUri: haloConfig.redirectUri,
+          scopes: haloConfig.scopes
+        },
+        status: "ACTIVE",
+        lastError: undefined,
+        createdAt: now,
+        updatedAt: now
+      };
+
+      await this.store.upsert(account);
+      await this.auditService.log({
+        tenantId: payload.tenantId,
+        userId: payload.userId,
+        action: "CONNECTOR_CONNECTED",
+        targetType: "connected_account",
+        metadata: { provider }
+      });
+
+      return {
+        returnTo: payload.returnTo ?? `${config.appUrl}/dashboard/connectors`,
+        tenantId: payload.tenantId,
+        userId: payload.userId,
+        provider,
+        expiresAt: tokens.expiresAt,
+        scopes: tokens.scopes ?? haloConfig.scopes
+      };
+    }
+
     const adapter = this.registry.get(provider);
     if (!adapter?.exchangeCode) {
       throw new Error(`Provider ${provider} does not support token exchange`);
@@ -264,7 +338,96 @@ export class ConnectorService {
     }));
   }
 
+  async getConnectorConfig(tenantId: string, provider: ProviderName) {
+    const record = await this.configStore.get(tenantId, provider);
+    const configJson = (record?.configJson ?? {}) as StoredConnectorConfig;
+
+    switch (provider) {
+      case "halopsa":
+        return {
+          provider,
+          config: {
+            apiUrl: configJson.apiUrl ?? "",
+            clientId: configJson.clientId ?? "",
+            redirectUri: configJson.redirectUri ?? process.env.HALOPSA_REDIRECT_URI ?? `${config.apiUrl}/oauth/halopsa/callback`,
+            scopes: (configJson.scopes ?? this.getDefaultHaloScopes()).join(" "),
+            hasClientSecret: Boolean(configJson.clientSecretEncrypted)
+          }
+        };
+      case "ninjaone":
+        return {
+          provider,
+          config: {
+            apiUrl: configJson.apiUrl ?? "",
+            clientId: configJson.clientId ?? "",
+            scopes: (configJson.scopes ?? ["monitoring", "devices", "organizations"]).join(" "),
+            hasClientSecret: Boolean(configJson.clientSecretEncrypted)
+          }
+        };
+      case "cipp":
+        return {
+          provider,
+          config: {
+            apiUrl: configJson.apiUrl ?? "",
+            tenantId: configJson.tenantId ?? "",
+            clientId: configJson.clientId ?? configJson.appId ?? "",
+            hasClientSecret: Boolean(configJson.clientSecretEncrypted)
+          }
+        };
+      case "n8n":
+        return {
+          provider,
+          config: {
+            apiUrl: configJson.apiUrl ?? "",
+            clientId: configJson.clientId ?? "",
+            redirectUri: configJson.webhookBaseUrl ?? "",
+            hasClientSecret: Boolean(configJson.clientSecretEncrypted)
+          }
+        };
+      default:
+        return { provider, config: {} };
+    }
+  }
+
+  async saveConnectorConfig(tenantId: string, userId: string, provider: ProviderName, input: ConnectorConfigInput) {
+    const existing = (await this.configStore.get(tenantId, provider))?.configJson as StoredConnectorConfig | undefined;
+    const nextConfig = this.buildConnectorConfig(provider, input, existing);
+    const now = new Date();
+
+    await this.configStore.upsert({
+      tenantId,
+      provider,
+      configJson: nextConfig,
+      createdAt: now,
+      updatedAt: now
+    });
+
+    await this.auditService.log({
+      tenantId,
+      userId,
+      action: "CONNECTOR_CONFIG_UPDATED",
+      targetType: "connector_config",
+      metadata: { provider }
+    });
+
+    return this.getConnectorConfig(tenantId, provider);
+  }
+
   async ensureFreshAccount(account: ConnectedAccountRecord) {
+    if (account.provider === "halopsa") {
+      const refreshed = await this.refreshHaloAccountIfNeeded(account);
+      if (
+        refreshed.accessTokenEncrypted !== account.accessTokenEncrypted ||
+        refreshed.refreshTokenEncrypted !== account.refreshTokenEncrypted ||
+        refreshed.expiresAt?.toISOString() !== account.expiresAt?.toISOString() ||
+        refreshed.status !== account.status
+      ) {
+        refreshed.updatedAt = new Date();
+        await this.store.upsert(refreshed);
+      }
+      return refreshed;
+    }
+
     const adapter = this.registry.get(account.provider);
     if (!adapter) {
       throw new Error(`Unknown provider ${account.provider}`);
@@ -327,34 +490,35 @@ export class ConnectorService {
 
     const freshAccount = await this.ensureFreshAccount(account);
     const accessToken = this.encryption.decrypt(freshAccount.accessTokenEncrypted);
+    const baseUrl = this.getHaloBaseUrlForAccount(freshAccount);
 
     switch (toolName) {
       case "list_open_tickets":
-        return this.listOpenHaloTickets(accessToken, input);
+        return this.listOpenHaloTickets(baseUrl, accessToken, input);
       case "get_customer_overview":
-        return this.getHaloCustomerOverview(accessToken, input);
+        return this.getHaloCustomerOverview(baseUrl, accessToken, input);
       case "get_ticket":
-        return this.getHaloTicket(accessToken, input);
+        return this.getHaloTicket(baseUrl, accessToken, input);
       case "get_ticket_with_actions":
-        return this.getHaloTicketWithActions(accessToken, input);
+        return this.getHaloTicketWithActions(baseUrl, accessToken, input);
       case "find_customer":
-        return this.findHaloCustomer(accessToken, input);
+        return this.findHaloCustomer(baseUrl, accessToken, input);
       case "list_ticket_actions":
-        return this.listHaloTicketActions(accessToken, input);
+        return this.listHaloTicketActions(baseUrl, accessToken, input);
       case "search_projects":
-        return this.searchHaloProjects(accessToken, input);
+        return this.searchHaloProjects(baseUrl, accessToken, input);
       case "find_contact":
-        return this.findHaloContact(accessToken, input);
+        return this.findHaloContact(baseUrl, accessToken, input);
       case "search_documents":
-        return this.searchHaloDocuments(accessToken, input);
+        return this.searchHaloDocuments(baseUrl, accessToken, input);
       case "list_devices_for_site":
-        return this.listHaloDevicesForSite(accessToken, input);
+        return this.listHaloDevicesForSite(baseUrl, accessToken, input);
       case "get_recent_invoices":
-        return this.getRecentHaloInvoices(accessToken, input);
+        return this.getRecentHaloInvoices(baseUrl, accessToken, input);
       case "create_draft_ticket":
-        return this.createDraftHaloTicket(accessToken, input);
+        return this.createDraftHaloTicket(baseUrl, accessToken, input);
       case "add_internal_note":
-        return this.addHaloInternalNote(accessToken, input);
+        return this.addHaloInternalNote(baseUrl, accessToken, input);
       default: {
         const tool = this.registry.get("halopsa")?.getTools().find((candidate) => candidate.name === toolName);
         if (!tool) {
@@ -375,7 +539,7 @@ export class ConnectorService {
     }
   }
 
-  private async listOpenHaloTickets(accessToken: string, input: Record<string, unknown>) {
+  private async listOpenHaloTickets(baseUrl: string, accessToken: string, input: Record<string, unknown>) {
     const query = typeof input.query === "string" ? input.query.trim() : undefined;
     const explicitClientId =
       pickNumber(input, ["clientId", "client_id"]) ??
@@ -386,7 +550,7 @@ export class ConnectorService {
     let resolvedCustomerName: string | undefined;
 
     if (!clientId && query) {
-      const customerLookup = await this.lookupHaloCustomers(accessToken, query, 10);
+      const customerLookup = await this.lookupHaloCustomers(baseUrl, accessToken, query, 10);
       const matchedCustomer = customerLookup.find((customer) =>
         [
           pickString(customer, ["name", "client_name"]),
@@ -401,7 +565,7 @@ export class ConnectorService {
         : undefined;
     }
 
-    const url = new URL(`${getHaloBaseUrl()}/api/tickets`);
+    const url = new URL(`${baseUrl}/api/tickets`);
     url.searchParams.set("count", "50");
     url.searchParams.set("includeclosed", "false");
     if (clientId) {
@@ -457,13 +621,13 @@ export class ConnectorService {
     };
   }
 
-  private async getHaloCustomerOverview(accessToken: string, input: Record<string, unknown>) {
+  private async getHaloCustomerOverview(baseUrl: string, accessToken: string, input: Record<string, unknown>) {
     const query = typeof input.query === "string" ? input.query.trim() : "";
     if (!query) {
       throw new Error("get_customer_overview requires a customer query");
     }
 
-    const customers = await this.lookupHaloCustomers(accessToken, query, 10);
+    const customers = await this.lookupHaloCustomers(baseUrl, accessToken, query, 10);
     const matchedCustomer =
       customers.find((customer) =>
         [
@@ -484,7 +648,7 @@ export class ConnectorService {
     const customerId = pickNumber(matchedCustomer, ["id", "client_id"]);
     const customerName =
       pickString(matchedCustomer, ["name", "client_name", "organisation_name", "customer_name"]) ?? query;
-    const tickets = await this.listOpenHaloTickets(accessToken, {
+    const tickets = await this.listOpenHaloTickets(baseUrl, accessToken, {
       client_id: customerId,
       query: customerName
     });
@@ -509,8 +673,8 @@ export class ConnectorService {
     };
   }
 
-  private async lookupHaloCustomers(accessToken: string, query: string, count = 25) {
-    const url = new URL(`${getHaloBaseUrl()}/api/client`);
+  private async lookupHaloCustomers(baseUrl: string, accessToken: string, query: string, count = 25) {
+    const url = new URL(`${baseUrl}/api/client`);
     url.searchParams.set("search", query);
     url.searchParams.set("count", String(count));
 
@@ -527,14 +691,14 @@ export class ConnectorService {
     return Array.isArray(payload) ? payload : (payload.clients ?? []);
   }
 
-  private async listHaloTicketActions(accessToken: string, input: Record<string, unknown>) {
+  private async listHaloTicketActions(baseUrl: string, accessToken: string, input: Record<string, unknown>) {
     const rawId = input.id ?? input.ticketId ?? input.ticket_id ?? input.query;
     const ticketId = typeof rawId === "number" || typeof rawId === "string" ? String(rawId).trim() : undefined;
     if (!ticketId) {
       throw new Error("list_ticket_actions requires a ticket id");
     }
 
-    const url = new URL(`${getHaloBaseUrl()}/api/actions`);
+    const url = new URL(`${baseUrl}/api/actions`);
     url.searchParams.set("count", "50");
     url.searchParams.set("ticket_id", ticketId);
 
@@ -568,8 +732,8 @@ export class ConnectorService {
     };
   }
 
-  private async getHaloTicketWithActions(accessToken: string, input: Record<string, unknown>) {
-    const ticket = await this.getHaloTicket(accessToken, input);
+  private async getHaloTicketWithActions(baseUrl: string, accessToken: string, input: Record<string, unknown>) {
+    const ticket = await this.getHaloTicket(baseUrl, accessToken, input);
     const ticketRecord = ticket.data[0] as Record<string, unknown> | undefined;
     const resolvedTicketId =
       pickNumber(ticketRecord ?? {}, ["id"]) ??
@@ -577,7 +741,7 @@ export class ConnectorService {
       (typeof input.query === "string" && !Number.isNaN(Number(input.query.trim())) ? Number(input.query.trim()) : undefined);
 
     const actions = resolvedTicketId
-      ? await this.listHaloTicketActions(accessToken, { ticket_id: resolvedTicketId })
+      ? await this.listHaloTicketActions(baseUrl, accessToken, { ticket_id: resolvedTicketId })
       : { summary: "No ticket actions loaded.", data: [], source: "halopsa" };
 
     return {
@@ -592,9 +756,9 @@ export class ConnectorService {
     };
   }
 
-  private async searchHaloProjects(accessToken: string, input: Record<string, unknown>) {
+  private async searchHaloProjects(baseUrl: string, accessToken: string, input: Record<string, unknown>) {
     const query = typeof input.query === "string" ? input.query.trim() : "";
-    const url = new URL(`${getHaloBaseUrl()}/api/projects`);
+    const url = new URL(`${baseUrl}/api/projects`);
     url.searchParams.set("count", "25");
     if (query) {
       url.searchParams.set("search", query);
@@ -629,13 +793,13 @@ export class ConnectorService {
     };
   }
 
-  private async findHaloContact(accessToken: string, input: Record<string, unknown>) {
+  private async findHaloContact(baseUrl: string, accessToken: string, input: Record<string, unknown>) {
     const query = typeof input.query === "string" ? input.query.trim() : "";
     if (!query) {
       throw new Error("find_contact requires a query");
     }
 
-    const url = new URL(`${getHaloBaseUrl()}/api/users`);
+    const url = new URL(`${baseUrl}/api/users`);
     url.searchParams.set("count", "25");
     url.searchParams.set("search", query);
 
@@ -668,13 +832,13 @@ export class ConnectorService {
     };
   }
 
-  private async searchHaloDocuments(accessToken: string, input: Record<string, unknown>) {
+  private async searchHaloDocuments(baseUrl: string, accessToken: string, input: Record<string, unknown>) {
     const query = typeof input.query === "string" ? input.query.trim() : "";
     if (!query) {
       throw new Error("search_documents requires a query");
     }
 
-    const url = new URL(`${getHaloBaseUrl()}/api/kbarticle`);
+    const url = new URL(`${baseUrl}/api/kbarticle`);
     url.searchParams.set("count", "25");
     url.searchParams.set("search", query);
 
@@ -707,7 +871,7 @@ export class ConnectorService {
     };
   }
 
-  private async listHaloDevicesForSite(accessToken: string, input: Record<string, unknown>) {
+  private async listHaloDevicesForSite(baseUrl: string, accessToken: string, input: Record<string, unknown>) {
     const rawSite = input.siteId ?? input.site_id ?? input.query;
     const siteRef = typeof rawSite === "number" || typeof rawSite === "string" ? String(rawSite).trim() : "";
     if (!siteRef) {
@@ -716,7 +880,7 @@ export class ConnectorService {
 
     let siteId = siteRef;
     if (Number.isNaN(Number(siteRef))) {
-      const siteUrl = new URL(`${getHaloBaseUrl()}/api/site`);
+      const siteUrl = new URL(`${baseUrl}/api/site`);
       siteUrl.searchParams.set("count", "10");
       siteUrl.searchParams.set("search", siteRef);
       const siteResponse = await haloFetch(siteUrl, {
@@ -738,7 +902,7 @@ export class ConnectorService {
       siteId = String(pickNumber(site, ["id", "site_id"]) ?? "");
     }
 
-    const assetUrl = new URL(`${getHaloBaseUrl()}/api/assets`);
+    const assetUrl = new URL(`${baseUrl}/api/assets`);
     assetUrl.searchParams.set("count", "50");
     assetUrl.searchParams.set("site_id", siteId);
 
@@ -772,10 +936,10 @@ export class ConnectorService {
     };
   }
 
-  private async getRecentHaloInvoices(accessToken: string, input: Record<string, unknown>) {
+  private async getRecentHaloInvoices(baseUrl: string, accessToken: string, input: Record<string, unknown>) {
     const countValue = typeof input.count === "number" ? input.count : typeof input.count === "string" ? Number(input.count) : 25;
     const count = Number.isFinite(countValue) ? Math.min(Math.max(countValue, 1), 50) : 25;
-    const url = new URL(`${getHaloBaseUrl()}/api/invoices`);
+    const url = new URL(`${baseUrl}/api/invoices`);
     url.searchParams.set("count", String(count));
 
     const response = await haloFetch(url, {
@@ -808,7 +972,7 @@ export class ConnectorService {
     };
   }
 
-  private async createDraftHaloTicket(accessToken: string, input: Record<string, unknown>) {
+  private async createDraftHaloTicket(baseUrl: string, accessToken: string, input: Record<string, unknown>) {
     const summary = typeof input.summary === "string" ? input.summary.trim() : typeof input.query === "string" ? input.query.trim() : "";
     if (!summary) {
       throw new Error("create_draft_ticket requires a summary");
@@ -824,7 +988,7 @@ export class ConnectorService {
       priority_id: pickNumber(input, ["priorityId", "priority_id"])
     };
 
-    const response = await haloFetch(`${getHaloBaseUrl()}/api/tickets`, {
+    const response = await haloFetch(`${baseUrl}/api/tickets`, {
       method: "POST",
       headers: buildHaloJsonHeaders(accessToken),
       body: JSON.stringify(payload),
@@ -851,7 +1015,7 @@ export class ConnectorService {
     };
   }
 
-  private async addHaloInternalNote(accessToken: string, input: Record<string, unknown>) {
+  private async addHaloInternalNote(baseUrl: string, accessToken: string, input: Record<string, unknown>) {
     const rawId =
       input.id ??
       input.ticketId ??
@@ -907,7 +1071,7 @@ export class ConnectorService {
       }
     ];
 
-    const response = await haloFetch(`${getHaloBaseUrl()}/api/actions`, {
+    const response = await haloFetch(`${baseUrl}/api/actions`, {
       method: "POST",
       headers: buildHaloJsonHeaders(accessToken),
       body: JSON.stringify(actionPayload),
@@ -934,7 +1098,7 @@ export class ConnectorService {
     };
   }
 
-  private async getHaloTicket(accessToken: string, input: Record<string, unknown>) {
+  private async getHaloTicket(baseUrl: string, accessToken: string, input: Record<string, unknown>) {
     const rawId = input.id ?? input.ticketId ?? input.ticket_id ?? input.query;
     const id = typeof rawId === "number" || typeof rawId === "string" ? String(rawId).trim() : undefined;
     if (!id) {
@@ -943,14 +1107,14 @@ export class ConnectorService {
 
     let ticket: HaloTicketRecord | undefined;
 
-    const directResponse = await haloFetch(`${getHaloBaseUrl()}/api/tickets/${id}`, {
+    const directResponse = await haloFetch(`${baseUrl}/api/tickets/${id}`, {
       headers: buildHaloHeaders(accessToken)
     });
 
     if (directResponse.ok) {
       ticket = (await directResponse.json()) as HaloTicketRecord;
     } else {
-      const searchUrl = new URL(`${getHaloBaseUrl()}/api/tickets`);
+      const searchUrl = new URL(`${baseUrl}/api/tickets`);
       searchUrl.searchParams.set("search", id);
       searchUrl.searchParams.set("count", "25");
 
@@ -989,13 +1153,13 @@ export class ConnectorService {
     };
   }
 
-  private async findHaloCustomer(accessToken: string, input: Record<string, unknown>) {
+  private async findHaloCustomer(baseUrl: string, accessToken: string, input: Record<string, unknown>) {
     const query = typeof input.query === "string" ? input.query : undefined;
     if (!query) {
       throw new Error("find_customer requires a query");
     }
 
-    const clients = await this.lookupHaloCustomers(accessToken, query, 25);
+    const clients = await this.lookupHaloCustomers(baseUrl, accessToken, query, 25);
 
     return {
       summary:
@@ -1012,5 +1176,178 @@ export class ConnectorService {
       })),
       source: "halopsa"
     };
+  }
+
+  private readOptionalString(input: ConnectorConfigInput, key: string) {
+    const value = input[key];
+    return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+  }
+
+  private normalizeApiUrl(value: string | undefined) {
+    return value?.replace(/\/$/, "");
+  }
+
+  private parseScopes(value: unknown, fallback: string[]) {
+    if (Array.isArray(value)) {
+      const scopes = value.map((item) => String(item).trim()).filter(Boolean);
+      return scopes.length > 0 ? scopes : fallback;
+    }
+
+    if (typeof value === "string") {
+      const scopes = value.split(/[\s,]+/).map((item) => item.trim()).filter(Boolean);
+      return scopes.length > 0 ? scopes : fallback;
+    }
+
+    return fallback;
+  }
+
+  private getDefaultHaloScopes() {
+    return (process.env.HALOPSA_SCOPES ?? "read:tickets read:customers read:actions offline_access")
+      .split(/\s+/)
+      .filter(Boolean);
+  }
+
+  private buildConnectorConfig(provider: ProviderName, input: ConnectorConfigInput, existing: StoredConnectorConfig = {}) {
+    const apiUrl = this.normalizeApiUrl(this.readOptionalString(input, "apiUrl")) ?? existing.apiUrl;
+    const clientId = this.readOptionalString(input, "clientId") ?? existing.clientId;
+    const rawSecret = this.readOptionalString(input, "clientSecret");
+    const clientSecretEncrypted = rawSecret ? this.encryption.encrypt(rawSecret) : existing.clientSecretEncrypted;
+
+    switch (provider) {
+      case "halopsa":
+        return {
+          apiUrl,
+          clientId,
+          clientSecretEncrypted,
+          redirectUri:
+            this.readOptionalString(input, "redirectUri") ??
+            existing.redirectUri ??
+            process.env.HALOPSA_REDIRECT_URI ??
+            `${config.apiUrl}/oauth/halopsa/callback`,
+          scopes: this.parseScopes(input.scopes, existing.scopes ?? this.getDefaultHaloScopes())
+        } satisfies StoredConnectorConfig;
+      case "ninjaone":
+        return {
+          apiUrl,
+          clientId,
+          clientSecretEncrypted,
+          scopes: this.parseScopes(input.scopes, existing.scopes ?? ["monitoring", "devices", "organizations"])
+        } satisfies StoredConnectorConfig;
+      case "cipp":
+        return {
+          apiUrl,
+          tenantId: this.readOptionalString(input, "tenantId") ?? existing.tenantId,
+          appId: clientId,
+          clientId,
+          clientSecretEncrypted
+        } satisfies StoredConnectorConfig;
+      case "n8n":
+        return {
+          apiUrl,
+          clientId,
+          clientSecretEncrypted,
+          webhookBaseUrl: this.normalizeApiUrl(this.readOptionalString(input, "redirectUri")) ?? existing.webhookBaseUrl
+        } satisfies StoredConnectorConfig;
+      default:
+        return existing;
+    }
+  }
+
+  private getHaloBaseUrlForAccount(account: ConnectedAccountRecord) {
+    const metadata = (account.metadataJson ?? {}) as StoredConnectorConfig;
+    const baseUrl = metadata.apiUrl ?? process.env.HALOPSA_BASE_URL ?? process.env.HALOPSA_URL;
+    if (!baseUrl) {
+      throw new Error("Set HaloPSA API URL in connector settings or HALOPSA_BASE_URL in the environment");
+    }
+
+    return baseUrl.replace(/\/$/, "");
+  }
+
+  private async resolveHaloConfig(tenantId: string) {
+    const stored = ((await this.configStore.get(tenantId, "halopsa"))?.configJson ?? {}) as StoredConnectorConfig;
+    const apiUrl = this.normalizeApiUrl(stored.apiUrl ?? process.env.HALOPSA_BASE_URL ?? process.env.HALOPSA_URL);
+    const clientId = stored.clientId ?? process.env.HALOPSA_CLIENT_ID;
+    const clientSecret =
+      stored.clientSecretEncrypted ? this.encryption.decrypt(stored.clientSecretEncrypted) : process.env.HALOPSA_CLIENT_SECRET;
+    const redirectUri = stored.redirectUri ?? process.env.HALOPSA_REDIRECT_URI ?? `${config.apiUrl}/oauth/halopsa/callback`;
+    const scopes = stored.scopes ?? this.getDefaultHaloScopes();
+
+    if (!apiUrl || !clientId || !clientSecret) {
+      throw new Error("HaloPSA requires API URL, client ID, and client secret in connector settings before connecting");
+    }
+
+    return { apiUrl, clientId, clientSecret, redirectUri, scopes };
+  }
+
+  private async exchangeHaloToken(
+    haloConfig: { apiUrl: string; clientId: string; clientSecret: string; redirectUri: string; scopes: string[] },
+    params: URLSearchParams
+  ) {
+    const response = await haloFetch(`${haloConfig.apiUrl}/auth/token`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/x-www-form-urlencoded"
+      },
+      body: params.toString(),
+      bodyPreview: params.toString()
+    });
+
+    if (!response.ok) {
+      const body = await response.text();
+      throw new Error(`HaloPSA token exchange failed (${response.status}): ${body}`);
+    }
+
+    const payload = (await response.json()) as {
+      access_token: string;
+      refresh_token?: string;
+      expires_in?: number;
+      scope?: string;
+    };
+
+    return {
+      accessToken: payload.access_token,
+      refreshToken: payload.refresh_token,
+      expiresAt: payload.expires_in ? new Date(Date.now() + payload.expires_in * 1000) : undefined,
+      scopes: payload.scope?.split(" ").filter(Boolean)
+    };
+  }
+
+  private async refreshHaloAccountIfNeeded(account: ConnectedAccountRecord): Promise<ConnectedAccountRecord> {
+    if (!account.expiresAt || account.expiresAt.getTime() > Date.now() + 60_000) {
+      return account;
+    }
+
+    if (!account.refreshTokenEncrypted) {
+      throw new Error(`No refresh path configured for ${account.provider}`);
+    }
+
+    try {
+      const haloConfig = await this.resolveHaloConfig(account.tenantId);
+      const refreshToken = this.encryption.decrypt(account.refreshTokenEncrypted);
+      const tokens = await this.exchangeHaloToken(
+        haloConfig,
+        new URLSearchParams({
+          grant_type: "refresh_token",
+          client_id: haloConfig.clientId,
+          client_secret: haloConfig.clientSecret,
+          refresh_token: refreshToken
+        })
+      );
+
+      return {
+        ...account,
+        accessTokenEncrypted: this.encryption.encrypt(tokens.accessToken),
+        refreshTokenEncrypted: tokens.refreshToken ? this.encryption.encrypt(tokens.refreshToken) : account.refreshTokenEncrypted,
+        expiresAt: tokens.expiresAt ?? account.expiresAt,
+        status: "ACTIVE",
+        lastError: undefined
+      };
+    } catch (error) {
+      return {
+        ...account,
+        status: "ERROR",
+        lastError: error instanceof Error ? error.message : "Unknown refresh error"
+      };
+    }
   }
 }
