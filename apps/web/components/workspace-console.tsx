@@ -197,10 +197,10 @@ function mapProviderStatus(status: string | undefined): Connector["status"] {
 }
 
 export function WorkspaceConsole({
-  mode = "overview",
+  mode = "catalog",
   initialSelectedConnector
 }: {
-  mode?: "overview" | "settings";
+  mode?: "catalog" | "detail";
   initialSelectedConnector?: string;
 }) {
   const router = useRouter();
@@ -823,13 +823,21 @@ export function WorkspaceConsole({
               <div
                 key={connector.id}
                 className={`connector-card connector-card-${connector.accent} ${selectedConnector === connector.id ? "selected" : ""}`}
-                onClick={() => setSelectedConnector(connector.id)}
+                onClick={() => {
+                  setSelectedConnector(connector.id);
+                  if (mode === "catalog") {
+                    router.push(`/dashboard/connectors/${connector.id}`);
+                  }
+                }}
                 role="button"
                 tabIndex={0}
                 onKeyDown={(event) => {
                   if (event.key === "Enter" || event.key === " ") {
                     event.preventDefault();
                     setSelectedConnector(connector.id);
+                    if (mode === "catalog") {
+                      router.push(`/dashboard/connectors/${connector.id}`);
+                    }
                   }
                 }}
               >
@@ -861,10 +869,24 @@ export function WorkspaceConsole({
                 </div>
                 <p className="connector-meta">{connector.tools.length} MCP tools available</p>
                 <div className="row">
-                  <button className="button primary" onClick={() => connectConnector(connector.id)} type="button">
+                  <button
+                    className="button primary"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      void connectConnector(connector.id);
+                    }}
+                    type="button"
+                  >
                     {connector.realOAuth ? `Connect ${connector.name}` : "Configure"}
                   </button>
-                  <button className="button secondary" onClick={() => void disconnectConnector(connector.id)} type="button">
+                  <button
+                    className="button secondary"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      void disconnectConnector(connector.id);
+                    }}
+                    type="button"
+                  >
                     Disconnect
                   </button>
                 </div>
@@ -872,6 +894,7 @@ export function WorkspaceConsole({
             ))}
           </div>
         </article>
+        {mode === "detail" ? (
         <article className="panel stack">
           <div className="section-heading">
             <div>
@@ -1027,6 +1050,7 @@ export function WorkspaceConsole({
             </button>
           </div>
         </article>
+        ) : null}
 
         <article className="panel stack">
           <div className="section-heading">

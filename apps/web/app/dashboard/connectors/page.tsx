@@ -7,9 +7,9 @@ export default function ConnectorsPage() {
       <PageHeader
         eyebrow="Customer Workspace"
         title="Connected products"
-        description="Manage tenant integrations, onboarding flows, and safe AI tool exposure from a single workspace."
+        description="Choose a connector to configure credentials, launch OAuth, and manage tenant-specific integrations."
       />
-      <WorkspaceConsole mode="overview" />
+      <WorkspaceConsole mode="catalog" />
     </div>
   );
 }
