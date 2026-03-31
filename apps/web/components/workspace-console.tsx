@@ -1,6 +1,4 @@
 "use client";
-
-import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { startTransition, useEffect, useMemo, useState } from "react";
 
@@ -816,24 +814,25 @@ export function WorkspaceConsole({
           <div className="section-heading">
             <div>
               <span className="eyebrow">Connectors</span>
-              <h2>{mode === "settings" ? "Connector catalogue" : "Service connections"}</h2>
+              <h2>Service connections</h2>
             </div>
-            <div className="row">
-              <span className="badge">{connectedCount} live</span>
-              {mode === "overview" ? (
-                <Link href="/dashboard/connectors/settings" className="button secondary">
-                  Connector settings
-                </Link>
-              ) : (
-                <Link href="/dashboard/connectors" className="button secondary">
-                  Back to connectors
-                </Link>
-              )}
-            </div>
+            <span className="badge">{connectedCount} live</span>
           </div>
           <div className="connector-grid">
             {state.connectors.map((connector) => (
-              <div key={connector.id} className={`connector-card connector-card-${connector.accent}`}>
+              <div
+                key={connector.id}
+                className={`connector-card connector-card-${connector.accent} ${selectedConnector === connector.id ? "selected" : ""}`}
+                onClick={() => setSelectedConnector(connector.id)}
+                role="button"
+                tabIndex={0}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    setSelectedConnector(connector.id);
+                  }
+                }}
+              >
                 <div className="row row-spread">
                   <div>
                     <div className="connector-brand-row">
@@ -865,11 +864,6 @@ export function WorkspaceConsole({
                   <button className="button primary" onClick={() => connectConnector(connector.id)} type="button">
                     {connector.realOAuth ? `Connect ${connector.name}` : "Configure"}
                   </button>
-                  {mode === "overview" ? (
-                    <Link href={`/dashboard/connectors/settings?provider=${connector.id}`} className="button secondary">
-                      Settings
-                    </Link>
-                  ) : null}
                   <button className="button secondary" onClick={() => void disconnectConnector(connector.id)} type="button">
                     Disconnect
                   </button>
@@ -878,13 +872,11 @@ export function WorkspaceConsole({
             ))}
           </div>
         </article>
-
-        {mode === "settings" ? (
         <article className="panel stack">
           <div className="section-heading">
             <div>
               <span className="eyebrow">Connector Setup</span>
-              <h2>Configuration</h2>
+              <h2>{selected.name} setup</h2>
             </div>
           </div>
           <label className="stack">
@@ -1035,27 +1027,6 @@ export function WorkspaceConsole({
             </button>
           </div>
         </article>
-        ) : (
-        <article className="panel stack">
-          <div className="section-heading">
-            <div>
-              <span className="eyebrow">Configuration</span>
-              <h2>Move setup out of the way</h2>
-            </div>
-          </div>
-          <div className="setup-card stack">
-            <strong>Use the dedicated settings page for credentials and OAuth setup.</strong>
-            <p className="muted">
-              Keep this connectors page focused on what is linked, what tools are exposed, and which platforms are ready for your tenants.
-            </p>
-            <div className="row">
-              <Link href="/dashboard/connectors/settings" className="button primary">
-                Open connector settings
-              </Link>
-            </div>
-          </div>
-        </article>
-        )}
 
         <article className="panel stack">
           <div className="section-heading">
