@@ -60,11 +60,6 @@ export class PlatformService {
   async ensureSeedData() {
     await this.ready;
 
-    const existing = await pool.query<{ count: string }>("SELECT COUNT(*)::text AS count FROM tenants");
-    if (Number(existing.rows[0]?.count ?? "0") > 0) {
-      return;
-    }
-
     const client = await pool.connect();
     try {
       await client.query("BEGIN");
@@ -78,6 +73,17 @@ export class PlatformService {
             ('t-001', 'legal-ops-co', 'Legal Ops Co', 'CUSTOMER', 'ACTIVE', 'Enterprise', 'Legal Services', 'London', 't-msp', $2::jsonb, NOW(), NOW()),
             ('t-002', 'meridian-it', 'Meridian IT Services', 'CUSTOMER', 'ACTIVE', 'Professional', 'Technology', 'Manchester', 't-msp', $3::jsonb, NOW(), NOW()),
             ('t-003', 'apex-consulting', 'Apex Consulting', 'CUSTOMER', 'ACTIVE', 'Professional', 'Consulting', 'Bristol', 't-msp', $4::jsonb, NOW(), NOW())
+          ON CONFLICT (id) DO UPDATE SET
+            slug = EXCLUDED.slug,
+            name = EXCLUDED.name,
+            tenant_type = EXCLUDED.tenant_type,
+            status = EXCLUDED.status,
+            plan = EXCLUDED.plan,
+            vertical = EXCLUDED.vertical,
+            region = EXCLUDED.region,
+            parent_tenant_id = EXCLUDED.parent_tenant_id,
+            branding_json = EXCLUDED.branding_json,
+            updated_at = NOW()
         `,
         [
           JSON.stringify({ brandName: "Nexian", website: "https://www.nexian.co.uk", primaryColor: "#0f6d98", accentColor: "#25c0b2" }),
@@ -101,8 +107,32 @@ export class PlatformService {
             ('u-004', 't-002', 'mike@meridianit.com', $2, 'Mike Thompson', 'ADMIN', 'ACTIVE', NOW() - interval '2 hour', NOW(), NOW()),
             ('u-005', 't-002', 'rachel@meridianit.com', $2, 'Rachel Green', 'OWNER', 'ACTIVE', NOW() - interval '40 minute', NOW(), NOW()),
             ('u-006', 't-003', 'david@apex.io', $2, 'David Kim', 'OWNER', 'ACTIVE', NOW() - interval '5 hour', NOW(), NOW())
+          ON CONFLICT (id) DO UPDATE SET
+            tenant_id = EXCLUDED.tenant_id,
+            email = EXCLUDED.email,
+            password_hash = EXCLUDED.password_hash,
+            display_name = EXCLUDED.display_name,
+            role = EXCLUDED.role,
+            status = EXCLUDED.status,
+            last_active_at = EXCLUDED.last_active_at,
+            updated_at = NOW()
         `,
         [adminPasswordHash, userPasswordHash]
+      );
+
+      await client.query(
+        `
+          INSERT INTO tenant_memberships (user_id, tenant_id, role, created_at)
+          VALUES
+            ('u-001', 't-msp', 'OWNER', NOW()),
+            ('u-002', 't-001', 'OWNER', NOW()),
+            ('u-003', 't-001', 'ANALYST', NOW()),
+            ('u-004', 't-002', 'ADMIN', NOW()),
+            ('u-005', 't-002', 'OWNER', NOW()),
+            ('u-006', 't-003', 'OWNER', NOW())
+          ON CONFLICT (user_id, tenant_id) DO UPDATE SET
+            role = EXCLUDED.role
+        `
       );
 
       await client.query(
@@ -116,6 +146,19 @@ export class PlatformService {
             ('ca-003', 't-002', 'u-004', 'halopsa', 'u-004', 'seeded', NULL, NOW() + interval '1 day', ARRAY['read']::text[], '{"seeded":true}'::jsonb, 'ACTIVE', NULL, NOW(), NOW()),
             ('ca-004', 't-002', 'u-005', 'hubspot', 'u-005', 'seeded', NULL, NOW() + interval '1 day', ARRAY['read']::text[], '{"seeded":true}'::jsonb, 'ACTIVE', NULL, NOW(), NOW()),
             ('ca-005', 't-003', 'u-006', 'microsoft365', 'u-006', 'seeded', NULL, NOW() + interval '1 day', ARRAY['read']::text[], '{"seeded":true}'::jsonb, 'ERROR', 'Token refresh required', NOW(), NOW())
+          ON CONFLICT (id) DO UPDATE SET
+            tenant_id = EXCLUDED.tenant_id,
+            user_id = EXCLUDED.user_id,
+            provider = EXCLUDED.provider,
+            provider_account_id = EXCLUDED.provider_account_id,
+            access_token_encrypted = EXCLUDED.access_token_encrypted,
+            refresh_token_encrypted = EXCLUDED.refresh_token_encrypted,
+            expires_at = EXCLUDED.expires_at,
+            scopes = EXCLUDED.scopes,
+            metadata_json = EXCLUDED.metadata_json,
+            status = EXCLUDED.status,
+            last_error = EXCLUDED.last_error,
+            updated_at = NOW()
         `
       );
 
@@ -127,13 +170,23 @@ export class PlatformService {
       client.release();
     }
 
-    await this.auditService.log({
-      tenantId: "t-msp",
-      userId: "u-001",
-      action: "PLATFORM_SEEDED",
-      targetType: "platform",
-      metadata: { customers: 3 }
-    });
+    const alreadyLogged = await pool.query<{ count: string }>(
+      `
+        SELECT COUNT(*)::text AS count
+        FROM audit_events
+        WHERE tenant_id = 't-msp' AND user_id = 'u-001' AND action = 'PLATFORM_SEEDED'
+      `
+    );
+
+    if (Number(alreadyLogged.rows[0]?.count ?? "0") === 0) {
+      await this.auditService.log({
+        tenantId: "t-msp",
+        userId: "u-001",
+        action: "PLATFORM_SEEDED",
+        targetType: "platform",
+        metadata: { customers: 3 }
+      });
+    }
   }
 
   async getOverview() {
