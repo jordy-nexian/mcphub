@@ -197,8 +197,10 @@ function mapProviderStatus(status: string | undefined): Connector["status"] {
 }
 
 export function WorkspaceConsole({
+  mode = "catalog",
   initialSelectedConnector
 }: {
+  mode?: "catalog" | "detail";
   initialSelectedConnector?: string;
 }) {
   const router = useRouter();
@@ -807,7 +809,7 @@ export function WorkspaceConsole({
         </aside>
       </section>
 
-      <section className="stack connector-stack">
+      <section className={mode === "detail" ? "stack connector-stack" : "dashboard-grid"}>
         <article className="panel stack">
           <div className="section-heading">
             <div>
@@ -823,6 +825,9 @@ export function WorkspaceConsole({
                 className={`connector-card connector-card-${connector.accent} ${selectedConnector === connector.id ? "selected" : ""}`}
                 onClick={() => {
                   setSelectedConnector(connector.id);
+                  if (mode === "catalog") {
+                    router.push(`/dashboard/connectors/${connector.id}`);
+                  }
                 }}
                 role="button"
                 tabIndex={0}
@@ -830,6 +835,9 @@ export function WorkspaceConsole({
                   if (event.key === "Enter" || event.key === " ") {
                     event.preventDefault();
                     setSelectedConnector(connector.id);
+                    if (mode === "catalog") {
+                      router.push(`/dashboard/connectors/${connector.id}`);
+                    }
                   }
                 }}
               >
@@ -865,11 +873,15 @@ export function WorkspaceConsole({
                     className="button primary"
                     onClick={(event) => {
                       event.stopPropagation();
+                      if (mode === "catalog") {
+                        router.push(`/dashboard/connectors/${connector.id}`);
+                        return;
+                      }
                       void connectConnector(connector.id);
                     }}
                     type="button"
                   >
-                    {connector.realOAuth ? `Connect ${connector.name}` : "Configure"}
+                    Configure
                   </button>
                   <button
                     className="button secondary"
@@ -886,6 +898,7 @@ export function WorkspaceConsole({
             ))}
           </div>
         </article>
+        {mode === "detail" ? (
         <article className="panel stack">
           <div className="section-heading">
             <div>
@@ -1041,6 +1054,7 @@ export function WorkspaceConsole({
             </button>
           </div>
         </article>
+        ) : null}
 
         <article className="panel stack">
           <div className="section-heading">
