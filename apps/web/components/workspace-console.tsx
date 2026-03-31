@@ -197,10 +197,8 @@ function mapProviderStatus(status: string | undefined): Connector["status"] {
 }
 
 export function WorkspaceConsole({
-  mode = "catalog",
   initialSelectedConnector
 }: {
-  mode?: "catalog" | "detail";
   initialSelectedConnector?: string;
 }) {
   const router = useRouter();
@@ -809,7 +807,7 @@ export function WorkspaceConsole({
         </aside>
       </section>
 
-      <section className="dashboard-grid">
+      <section className="stack connector-stack">
         <article className="panel stack">
           <div className="section-heading">
             <div>
@@ -825,9 +823,6 @@ export function WorkspaceConsole({
                 className={`connector-card connector-card-${connector.accent} ${selectedConnector === connector.id ? "selected" : ""}`}
                 onClick={() => {
                   setSelectedConnector(connector.id);
-                  if (mode === "catalog") {
-                    router.push(`/dashboard/connectors/${connector.id}`);
-                  }
                 }}
                 role="button"
                 tabIndex={0}
@@ -835,9 +830,6 @@ export function WorkspaceConsole({
                   if (event.key === "Enter" || event.key === " ") {
                     event.preventDefault();
                     setSelectedConnector(connector.id);
-                    if (mode === "catalog") {
-                      router.push(`/dashboard/connectors/${connector.id}`);
-                    }
                   }
                 }}
               >
@@ -894,7 +886,6 @@ export function WorkspaceConsole({
             ))}
           </div>
         </article>
-        {mode === "detail" ? (
         <article className="panel stack">
           <div className="section-heading">
             <div>
@@ -1050,7 +1041,6 @@ export function WorkspaceConsole({
             </button>
           </div>
         </article>
-        ) : null}
 
         <article className="panel stack">
           <div className="section-heading">
@@ -1082,33 +1072,6 @@ export function WorkspaceConsole({
           </div>
           <div className="notice">
             Example header: <code>Authorization: Bearer &lt;token&gt;</code>
-          </div>
-        </article>
-
-        <article className="panel stack">
-          <div className="section-heading">
-            <div>
-              <span className="eyebrow">Permissions</span>
-              <h2>Tool guardrails</h2>
-            </div>
-          </div>
-          <div className="permission-list">
-            {state.permissions.map((permission) => (
-              <label key={permission.tool} className="permission-item">
-                <div>
-                  <strong>{permission.tool}</strong>
-                  <p className="muted">{permission.roles.join(", ")}</p>
-                </div>
-                <button
-                  className={`toggle ${permission.enabled ? "enabled" : ""}`}
-                  onClick={() => togglePermission(permission.tool)}
-                  type="button"
-                  aria-pressed={permission.enabled}
-                >
-                  <span />
-                </button>
-              </label>
-            ))}
           </div>
         </article>
 

@@ -9,7 +9,7 @@ export default function ConnectorsPage() {
         title="Connected products"
         description="Choose a connector to configure credentials, launch OAuth, and manage tenant-specific integrations."
       />
-      <WorkspaceConsole mode="catalog" />
+      <WorkspaceConsole />
     </div>
   );
 }
