@@ -142,14 +142,12 @@ function isTicketOpen(record: HaloTicketRecord) {
     return false;
   }
 
-  const statusName = getHaloTicketStatus(record)?.toLowerCase();
+  const statusName = getHaloTicketStatus(record);
   if (!statusName) {
     return true;
   }
 
-  return !["closed", "resolved", "completed", "cancelled", "canceled", "inactive"].some((keyword) =>
-    statusName.includes(keyword)
-  );
+  return statusName.trim().toLowerCase() !== "closed";
 }
 
 function buildHaloHeaders(accessToken: string) {
