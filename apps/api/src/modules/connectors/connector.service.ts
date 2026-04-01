@@ -206,19 +206,74 @@ function isProjectOpen(record: HaloGenericRecord) {
   );
 }
 
+function normalizeIdentityToken(value: string) {
+  return value.toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+function buildIdentityVariants(value: string) {
+  const normalized = normalizeWhitespace(value);
+  if (!normalized) {
+    return [];
+  }
+
+  const pieces = normalized
+    .split(/[\s@._\\/-]+/)
+    .map((piece) => piece.trim())
+    .filter(Boolean);
+
+  const joined = pieces.join("");
+  const dashed = pieces.join("-");
+  const underscored = pieces.join("_");
+  const emailLocalPart = normalized.includes("@") ? normalized.split("@")[0] : "";
+  const variants = new Set(
+    [
+      normalized,
+      normalized.replace(/\s+/g, ""),
+      joined,
+      dashed,
+      underscored,
+      emailLocalPart,
+      normalized.replace(/^.*\\/, ""),
+      normalized.replace(/^.*\//, "")
+    ]
+      .map((candidate) => candidate.trim())
+      .filter(Boolean)
+  );
+
+  if (pieces.length >= 2) {
+    variants.add(`${pieces[0]}${pieces[pieces.length - 1]}`);
+    variants.add(`${pieces[0]}.${pieces[pieces.length - 1]}`);
+    variants.add(`${pieces[0]}_${pieces[pieces.length - 1]}`);
+    variants.add(`${pieces[0]}-${pieces[pieces.length - 1]}`);
+    variants.add(`${pieces[pieces.length - 1]}${pieces[0]}`);
+    variants.add(`${pieces[0][0]}${pieces[pieces.length - 1]}`);
+  }
+
+  return [...variants];
+}
+
 function deviceMatchesUserHint(device: Record<string, unknown>, userHint: string) {
   if (!userHint) {
     return true;
   }
 
-  const lowered = userHint.toLowerCase();
+  const variants = buildIdentityVariants(userHint);
   const candidates = [
     pickString(device, ["lastLoggedInUser", "currentUser", "loggedInUser", "assignedUser", "userName", "username"]),
-    pickString(device, ["primaryUser", "owner", "contactName", "user", "displayName"]),
+    pickString(device, ["primaryUser", "owner", "contactName", "user", "displayName", "loggedInUsername"]),
+    pickString(device, ["email", "emailAddress", "userEmail"]),
     pickString(device, ["organizationName", "organisationName", "customerName"])
   ].filter(Boolean) as string[];
 
-  return candidates.some((candidate) => candidate.toLowerCase().includes(lowered));
+  return candidates.some((candidate) => {
+    const loweredCandidate = candidate.toLowerCase();
+    const normalizedCandidate = normalizeIdentityToken(candidate);
+    return variants.some((variant) => {
+      const loweredVariant = variant.toLowerCase();
+      const normalizedVariant = normalizeIdentityToken(variant);
+      return loweredCandidate.includes(loweredVariant) || normalizedCandidate.includes(normalizedVariant);
+    });
+  });
 }
 
 function extractUserHint(query: string | undefined) {
