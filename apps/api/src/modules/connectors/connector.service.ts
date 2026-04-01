@@ -154,6 +154,34 @@ function buildHaloOpenRuleFields(ticket: HaloTicketRecord, resolvedStatus: strin
   };
 }
 
+function isProjectStyleTicket(ticket: HaloTicketRecord) {
+  const requestType = pickString(ticket, [
+    "requesttype_name",
+    "request_type",
+    "requesttype",
+    "request_type_name",
+    "itil_requesttype_name",
+    "itil_requesttype"
+  ]);
+  const category = pickString(ticket, [
+    "category_1_name",
+    "category_2_name",
+    "category_3_name",
+    "category_4_name",
+    "category_name",
+    "category"
+  ]);
+  const team = pickString(ticket, ["team_name", "team"]);
+  const summary = pickString(ticket, ["summary", "subject", "title"]);
+
+  const combined = [requestType, category, team, summary]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+
+  return /\b(project|projects|project delivery|implementation|release|deployment|change request)\b/.test(combined);
+}
+
 function dedupeTicketsById(tickets: HaloTicketRecord[]) {
   const seen = new Set<string>();
   const deduped: HaloTicketRecord[] = [];
@@ -1051,6 +1079,7 @@ export class ConnectorService {
 
   private async listOpenHaloTickets(baseUrl: string, accessToken: string, input: Record<string, unknown>) {
     const rawQuery = typeof input.query === "string" ? input.query.trim() : undefined;
+    const asksForProjects = /\b(project|projects|project ticket|project work|release|implementation)\b/i.test(rawQuery ?? "");
     const query = extractMeaningfulQuery(rawQuery, [
       /\bopen\b/g,
       /\brecent\b/g,
@@ -1171,6 +1200,13 @@ export class ConnectorService {
             (matchedCustomerNames.some((name) => textMatches(ticketCustomerName, name) || textMatches(name, ticketCustomerName)) ||
               (query ? textMatches(ticketCustomerName, query) : false))
         );
+      })
+      .filter((ticket) => {
+        if (asksForProjects || input.includeProjectTickets === true) {
+          return true;
+        }
+
+        return !isProjectStyleTicket(ticket);
       })
       .slice(0, limit);
 
