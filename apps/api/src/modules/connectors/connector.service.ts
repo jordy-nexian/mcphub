@@ -155,15 +155,19 @@ function buildHaloOpenRuleFields(ticket: HaloTicketRecord, resolvedStatus: strin
 }
 
 function isProjectStyleTicket(ticket: HaloTicketRecord) {
-  const requestType = pickString(ticket, [
-    "requesttype_name",
-    "request_type",
-    "requesttype",
-    "request_type_name",
-    "itil_requesttype_name",
-    "itil_requesttype"
-  ]);
-  const team = pickString(ticket, ["team_name", "team"]);
+  const requestType =
+    pickString(ticket, [
+      "requesttype_name",
+      "request_type",
+      "requesttype",
+      "request_type_name",
+      "itil_requesttype_name",
+      "itil_requesttype"
+    ]) ??
+    pickNestedString(ticket, ["requesttype", "request_type", "itil_requesttype"]);
+  const team =
+    pickString(ticket, ["team_name", "team"]) ??
+    pickNestedString(ticket, ["team", "team_name", "queue", "department"]);
   const normalizedRequestType = requestType?.trim().toLowerCase();
   const normalizedTeam = team?.trim().toLowerCase();
 
@@ -174,7 +178,7 @@ function isProjectStyleTicket(ticket: HaloTicketRecord) {
     "project scoping",
     "project"
   ]);
-  const projectQueues = new Set(["projects (internal)", "project engineers"]);
+  const projectQueues = new Set(["projects (internal)", "project engineers", "project enmgineers"]);
 
   return (
     (normalizedRequestType ? projectRequestTypes.has(normalizedRequestType) : false) ||
