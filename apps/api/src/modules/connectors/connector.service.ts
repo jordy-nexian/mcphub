@@ -61,13 +61,54 @@ function pickNumber(record: Record<string, unknown>, keys: string[]) {
   return undefined;
 }
 
+function pickNestedString(record: Record<string, unknown>, keys: string[]) {
+  for (const key of keys) {
+    const value = record[key];
+    if (value && typeof value === "object" && !Array.isArray(value)) {
+      const nested = pickString(value as Record<string, unknown>, ["name", "label", "displayName", "value", "text"]);
+      if (nested) {
+        return nested;
+      }
+    }
+  }
+
+  return undefined;
+}
+
+function pickNestedNumber(record: Record<string, unknown>, keys: string[]) {
+  for (const key of keys) {
+    const value = record[key];
+    if (value && typeof value === "object" && !Array.isArray(value)) {
+      const nested = pickNumber(value as Record<string, unknown>, ["id", "value", "statusId"]);
+      if (nested !== undefined) {
+        return nested;
+      }
+    }
+  }
+
+  return undefined;
+}
+
+function getHaloTicketStatus(record: HaloTicketRecord) {
+  return (
+    pickString(record, ["status_name", "status", "ticketstatus", "statusName", "ticket_status", "workflow_status"]) ??
+    pickNestedString(record, ["status", "ticketstatus", "workflow_status", "ticket_status", "status_detail"])
+  );
+}
+
 function isTicketOpen(record: HaloTicketRecord) {
   const closedCandidates = [
     record.closed,
     record.isclosed,
     record.isClosed,
     record.inactive,
-    record.isinactive
+    record.isinactive,
+    record.dateclosed,
+    record.closed_date,
+    record.closedDate,
+    record.datecompleted,
+    record.completed_date,
+    record.completedDate
   ];
   for (const candidate of closedCandidates) {
     if (typeof candidate === "boolean") {
@@ -82,20 +123,26 @@ function isTicketOpen(record: HaloTicketRecord) {
     }
     if (typeof candidate === "string") {
       const normalized = candidate.trim().toLowerCase();
-      if (["true", "1", "yes", "closed", "resolved", "completed", "cancelled", "canceled"].includes(normalized)) {
+      if (!normalized) {
+        continue;
+      }
+      if (
+        ["true", "1", "yes", "closed", "resolved", "completed", "cancelled", "canceled"].includes(normalized) ||
+        /^\d{4}-\d{2}-\d{2}/.test(normalized)
+      ) {
         return false;
       }
     }
   }
 
-  const statusName = pickString(record, [
-    "status_name",
-    "status",
-    "ticketstatus",
-    "statusName",
-    "ticket_status",
-    "workflow_status"
-  ])?.toLowerCase();
+  const statusId =
+    pickNumber(record, ["status_id", "ticketstatus_id", "ticketStatusId"]) ??
+    pickNestedNumber(record, ["status", "ticketstatus", "workflow_status", "ticket_status"]);
+  if (typeof statusId === "number" && statusId < 0) {
+    return false;
+  }
+
+  const statusName = getHaloTicketStatus(record)?.toLowerCase();
   if (!statusName) {
     return true;
   }
@@ -1008,7 +1055,7 @@ export class ConnectorService {
       data: openTickets.map((ticket) => ({
         id: pickNumber(ticket, ["id", "ticket_id", "TicketID"]),
         summary: pickString(ticket, ["summary", "subject", "title"]) ?? "Untitled ticket",
-        status: pickString(ticket, ["status_name", "status", "ticketstatus"]),
+        status: getHaloTicketStatus(ticket),
         customer: pickString(ticket, ["client_name", "customer_name", "organisation_name"]),
         priority: pickString(ticket, ["priority_name", "priority"]),
         lastActionAt: pickString(ticket, ["last_action_date", "lastupdated", "dateupdated"]),
@@ -1785,7 +1832,7 @@ export class ConnectorService {
         {
           id: pickNumber(ticket, ["id", "ticket_id", "TicketID"]),
           summary: pickString(ticket, ["summary", "subject", "title"]),
-          status: pickString(ticket, ["status_name", "status", "ticketstatus"]),
+          status: getHaloTicketStatus(ticket),
           raw: ticket
         }
       ],
@@ -1921,7 +1968,7 @@ export class ConnectorService {
         {
           id: pickNumber(ticket, ["id", "ticket_id", "TicketID"]),
           summary: pickString(ticket, ["summary", "subject", "title"]),
-          status: pickString(ticket, ["status_name", "status", "ticketstatus"]),
+          status: getHaloTicketStatus(ticket),
           customer: pickString(ticket, ["client_name", "customer_name", "organisation_name"]),
           priority: pickString(ticket, ["priority_name", "priority"]),
           details: ticket
