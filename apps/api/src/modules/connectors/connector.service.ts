@@ -96,6 +96,10 @@ function getHaloTicketStatus(record: HaloTicketRecord) {
   );
 }
 
+function extractHaloTickets(payload: unknown) {
+  return normalizeCollectionPayload(payload, ["tickets", "results", "data", "records"]);
+}
+
 function isTicketOpen(record: HaloTicketRecord) {
   const closedCandidates = [
     record.closed,
@@ -1004,29 +1008,14 @@ export class ConnectorService {
 
     const requestedLimit =
       pickNumber(input, ["limit", "count", "top"]) ??
-      (typeof input.query === "string" && /\b(all)\b/i.test(input.query) ? 100 : 50);
+      (typeof input.query === "string" && /\b(all)\b/i.test(input.query) ? 250 : 100);
     const limit = Math.max(1, Math.min(requestedLimit, 100));
-
-    const url = new URL(`${baseUrl}/api/tickets`);
-    url.searchParams.set("count", String(limit));
-    url.searchParams.set("includeclosed", wantsOpenItems(input, rawQuery) ? "false" : "true");
-    if (clientId) {
-      url.searchParams.set("client_id", String(clientId));
-    } else if (query) {
-      url.searchParams.set("search", query);
-    }
-
-    const response = await haloFetch(url, {
-      headers: buildHaloHeaders(accessToken)
+    const tickets = await this.fetchHaloTickets(baseUrl, accessToken, {
+      clientId,
+      query,
+      includeClosed: !wantsOpenItems(input, rawQuery),
+      limit
     });
-
-    if (!response.ok) {
-      const body = await response.text();
-      throw new Error(`HaloPSA tickets request failed (${response.status}): ${body}`);
-    }
-
-    const payload = (await response.json()) as HaloTicketRecord[] | { tickets?: HaloTicketRecord[] };
-    const tickets = Array.isArray(payload) ? payload : (payload.tickets ?? []);
 
     const openTickets = tickets
       .filter(isTicketOpen)
@@ -1131,6 +1120,55 @@ export class ConnectorService {
 
     const payload = (await response.json()) as HaloClientRecord[] | { clients?: HaloClientRecord[] };
     return Array.isArray(payload) ? payload : (payload.clients ?? []);
+  }
+
+  private async fetchHaloTickets(
+    baseUrl: string,
+    accessToken: string,
+    options: {
+      clientId?: number;
+      query?: string;
+      includeClosed: boolean;
+      limit: number;
+    }
+  ) {
+    const pageSize = Math.min(Math.max(options.limit, 50), 100);
+    const maxResults = Math.max(options.limit, pageSize);
+    const collected: HaloTicketRecord[] = [];
+
+    for (let page = 1; page <= 10 && collected.length < maxResults; page += 1) {
+      const url = new URL(`${baseUrl}/api/tickets`);
+      url.searchParams.set("count", String(pageSize));
+      url.searchParams.set("includeclosed", options.includeClosed ? "true" : "false");
+      url.searchParams.set("paginate", "true");
+      url.searchParams.set("page_no", String(page));
+      url.searchParams.set("page_size", String(pageSize));
+
+      if (options.clientId) {
+        url.searchParams.set("client_id", String(options.clientId));
+      } else if (options.query) {
+        url.searchParams.set("search", options.query);
+      }
+
+      const response = await haloFetch(url, {
+        headers: buildHaloHeaders(accessToken)
+      });
+
+      if (!response.ok) {
+        const body = await response.text();
+        throw new Error(`HaloPSA tickets request failed (${response.status}): ${body}`);
+      }
+
+      const payload = (await response.json()) as unknown;
+      const pageTickets = extractHaloTickets(payload);
+      collected.push(...pageTickets);
+
+      if (pageTickets.length < pageSize) {
+        break;
+      }
+    }
+
+    return collected.slice(0, maxResults);
   }
 
   private async resolveHaloEntityHints(tenantId: string, userId: string, query: string): Promise<ResolvedEntityHints> {
