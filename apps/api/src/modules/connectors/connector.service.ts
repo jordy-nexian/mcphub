@@ -119,6 +119,32 @@ function buildSearchAliases(query: string, names: string[] = []) {
   return [...aliases].filter((value) => value.length >= 3);
 }
 
+function appendQueryValue(url: URL, key: string, value: unknown) {
+  if (value === undefined || value === null) {
+    return;
+  }
+
+  if (Array.isArray(value)) {
+    if (value.length === 0) {
+      return;
+    }
+    url.searchParams.set(key, value.join(","));
+    return;
+  }
+
+  if (typeof value === "boolean") {
+    url.searchParams.set(key, value ? "true" : "false");
+    return;
+  }
+
+  const normalized = String(value).trim();
+  if (!normalized) {
+    return;
+  }
+
+  url.searchParams.set(key, normalized);
+}
+
 function dedupeTicketsById(tickets: HaloTicketRecord[]) {
   const seen = new Set<string>();
   const deduped: HaloTicketRecord[] = [];
@@ -1028,6 +1054,8 @@ export class ConnectorService {
       pickNumber(input, ["clientId", "client_id"]) ??
       pickNumber(input, ["customerId", "customer_id"]) ??
       pickNumber(input, ["organisationId", "organisation_id"]);
+    const structuredOpenOnly = typeof input.open_only === "boolean" ? input.open_only : undefined;
+    const structuredClosedOnly = typeof input.closed_only === "boolean" ? input.closed_only : undefined;
 
     let clientId = explicitClientId;
     let resolvedCustomerName: string | undefined;
@@ -1060,7 +1088,12 @@ export class ConnectorService {
       pickNumber(input, ["limit", "count", "top"]) ??
       (typeof input.query === "string" && /\b(all)\b/i.test(input.query) ? 250 : 100);
     const limit = Math.max(1, Math.min(requestedLimit, 100));
-    const includeClosed = !wantsOpenItems(input, rawQuery);
+    const includeClosed =
+      structuredClosedOnly === true
+        ? true
+        : structuredOpenOnly === true
+          ? false
+          : !wantsOpenItems(input, rawQuery);
     const searchAliases = query ? buildSearchAliases(query, matchedCustomerNames) : [];
     const fetchedTicketGroups = await Promise.all([
       ...(matchedClientIds.length > 0
@@ -1069,7 +1102,8 @@ export class ConnectorService {
               clientId: matchedId,
               query,
               includeClosed,
-              limit
+              limit,
+              filters: input
             })
           )
         : []),
@@ -1078,7 +1112,8 @@ export class ConnectorService {
             this.fetchHaloTickets(baseUrl, accessToken, {
               query: alias,
               includeClosed,
-              limit
+              limit,
+              filters: input
             })
           )
         : matchedClientIds.length === 0
@@ -1087,7 +1122,8 @@ export class ConnectorService {
                 clientId,
                 query,
                 includeClosed,
-                limit
+                limit,
+                filters: input
               })
             ]
           : [])
@@ -1095,7 +1131,15 @@ export class ConnectorService {
     const tickets = dedupeTicketsById(fetchedTicketGroups.flat());
 
     const openTickets = tickets
-      .filter(isTicketOpen)
+      .filter((ticket) => {
+        if (structuredClosedOnly === true) {
+          return !isTicketOpen(ticket);
+        }
+        if (structuredOpenOnly === true || wantsOpenItems(input, rawQuery)) {
+          return isTicketOpen(ticket);
+        }
+        return true;
+      })
       .filter((ticket) => {
         if (matchedClientIds.length === 0) {
           return true;
@@ -1224,23 +1268,94 @@ export class ConnectorService {
       query?: string;
       includeClosed: boolean;
       limit: number;
+      filters?: Record<string, unknown>;
     }
   ) {
-    const pageSize = Math.min(Math.max(options.limit, 50), 100);
+    const requestedPageSize =
+      pickNumber(options.filters ?? {}, ["page_size", "count", "limit", "top"]) ?? options.limit;
+    const pageSize = Math.min(Math.max(requestedPageSize, 50), 200);
     const maxResults = Math.max(options.limit, pageSize);
     const collected: HaloTicketRecord[] = [];
 
     for (let page = 1; page <= 10 && collected.length < maxResults; page += 1) {
       const url = new URL(`${baseUrl}/api/tickets`);
-      url.searchParams.set("count", String(pageSize));
-      url.searchParams.set("includeclosed", options.includeClosed ? "true" : "false");
-      url.searchParams.set("paginate", "true");
-      url.searchParams.set("page_no", String(page));
-      url.searchParams.set("page_size", String(pageSize));
+      const filters = options.filters ?? {};
+      appendQueryValue(url, "count", pickNumber(filters, ["count"]) ?? pageSize);
+      appendQueryValue(url, "includeclosed", options.includeClosed);
+      appendQueryValue(url, "paginate", typeof filters.paginate === "boolean" ? filters.paginate : true);
+      appendQueryValue(url, "page_no", pickNumber(filters, ["page_no"]) ?? page);
+      appendQueryValue(url, "page_size", pickNumber(filters, ["page_size"]) ?? pageSize);
+      for (const key of [
+        "order",
+        "orderdesc",
+        "ticketidonly",
+        "view_id",
+        "columns_id",
+        "includecolumns",
+        "includeslaactiondate",
+        "includeslatimer",
+        "includetimetaken",
+        "includesupplier",
+        "includerelease1",
+        "includerelease2",
+        "includerelease3",
+        "includechildids",
+        "includenextactivitydate",
+        "list_id",
+        "agent_id",
+        "status_id",
+        "requesttype_id",
+        "supplier_id",
+        "client_id",
+        "site",
+        "username",
+        "user_id",
+        "release_id",
+        "asset_id",
+        "itil_requesttype_id",
+        "open_only",
+        "closed_only",
+        "unlinked_only",
+        "contract_id",
+        "withattachments",
+        "team",
+        "agent",
+        "status",
+        "requesttype",
+        "itil_requesttype",
+        "category_1",
+        "category_2",
+        "category_3",
+        "category_4",
+        "sla",
+        "priority",
+        "products",
+        "flagged",
+        "excludethese",
+        "search",
+        "searchactions",
+        "datesearch",
+        "startdate",
+        "enddate",
+        "search_user_name",
+        "search_summary",
+        "search_details",
+        "search_reportedby",
+        "search_version",
+        "search_release1",
+        "search_release2",
+        "search_release3",
+        "search_releasenote",
+        "search_invenotry_number",
+        "search_oppcontactname",
+        "search_oppcompanyname"
+      ]) {
+        appendQueryValue(url, key, filters[key]);
+      }
 
       if (options.clientId) {
         url.searchParams.set("client_id", String(options.clientId));
-      } else if (options.query) {
+      } else if (options.query && !url.searchParams.has("search")) {
         url.searchParams.set("search", options.query);
       }
 

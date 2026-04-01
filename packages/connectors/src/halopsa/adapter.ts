@@ -1,7 +1,108 @@
+import { z } from "zod";
+
 import { createStubTool } from "../base/tool-factory";
 
-import type { ProviderAdapter } from "@nexian/core/connectors/contracts";
+import type { ConnectorToolDefinition, ProviderAdapter } from "@nexian/core/connectors/contracts";
 import type { TokenPair } from "@nexian/core/domain/models";
+import type { NormalizedToolResponse } from "@nexian/core/mcp/tools";
+
+const haloTicketFiltersSchema = z.object({
+  query: z.string().optional(),
+  paginate: z.boolean().optional(),
+  page_size: z.number().int().positive().max(200).optional(),
+  page_no: z.number().int().positive().optional(),
+  order: z.string().optional(),
+  orderdesc: z.boolean().optional(),
+  ticketidonly: z.boolean().optional(),
+  view_id: z.number().int().optional(),
+  columns_id: z.number().int().optional(),
+  includecolumns: z.boolean().optional(),
+  includeslaactiondate: z.boolean().optional(),
+  includeslatimer: z.boolean().optional(),
+  includetimetaken: z.boolean().optional(),
+  includesupplier: z.boolean().optional(),
+  includerelease1: z.boolean().optional(),
+  includerelease2: z.boolean().optional(),
+  includerelease3: z.boolean().optional(),
+  includechildids: z.boolean().optional(),
+  includenextactivitydate: z.boolean().optional(),
+  list_id: z.number().int().optional(),
+  agent_id: z.number().int().optional(),
+  status_id: z.number().int().optional(),
+  requesttype_id: z.number().int().optional(),
+  supplier_id: z.number().int().optional(),
+  client_id: z.number().int().optional(),
+  site: z.number().int().optional(),
+  username: z.string().optional(),
+  user_id: z.number().int().optional(),
+  release_id: z.number().int().optional(),
+  asset_id: z.number().int().optional(),
+  itil_requesttype_id: z.number().int().optional(),
+  open_only: z.boolean().optional(),
+  closed_only: z.boolean().optional(),
+  unlinked_only: z.boolean().optional(),
+  contract_id: z.number().int().optional(),
+  withattachments: z.boolean().optional(),
+  team: z.array(z.number().int()).optional(),
+  agent: z.array(z.number().int()).optional(),
+  status: z.array(z.number().int()).optional(),
+  requesttype: z.array(z.number().int()).optional(),
+  itil_requesttype: z.array(z.number().int()).optional(),
+  category_1: z.array(z.number().int()).optional(),
+  category_2: z.array(z.number().int()).optional(),
+  category_3: z.array(z.number().int()).optional(),
+  category_4: z.array(z.number().int()).optional(),
+  sla: z.array(z.number().int()).optional(),
+  priority: z.array(z.number().int()).optional(),
+  products: z.array(z.number().int()).optional(),
+  flagged: z.array(z.number().int()).optional(),
+  excludethese: z.array(z.number().int()).optional(),
+  search: z.string().optional(),
+  searchactions: z.boolean().optional(),
+  datesearch: z.string().optional(),
+  startdate: z.string().optional(),
+  enddate: z.string().optional(),
+  search_user_name: z.string().optional(),
+  search_summary: z.string().optional(),
+  search_details: z.string().optional(),
+  search_reportedby: z.string().optional(),
+  search_version: z.string().optional(),
+  search_release1: z.string().optional(),
+  search_release2: z.string().optional(),
+  search_release3: z.string().optional(),
+  search_releasenote: z.string().optional(),
+  search_invenotry_number: z.string().optional(),
+  search_oppcontactname: z.string().optional(),
+  search_oppcompanyname: z.string().optional(),
+  limit: z.number().int().positive().max(250).optional(),
+  count: z.number().int().positive().max(250).optional(),
+  top: z.number().int().positive().max(250).optional(),
+  includeClosed: z.boolean().optional(),
+  clientId: z.number().int().optional(),
+  customerId: z.number().int().optional(),
+  organisationId: z.number().int().optional()
+});
+
+const haloListOpenTicketsTool: ConnectorToolDefinition<z.infer<typeof haloTicketFiltersSchema>, NormalizedToolResponse> = {
+  name: "list_open_tickets",
+  description:
+    "Use when the user wants a queue-style view of active tickets, open incidents, or tickets for a customer. Supports HaloPSA ticket filters such as client_id, site, status arrays, date search, pagination, ordering, and search fields.",
+  inputSchema: haloTicketFiltersSchema,
+  async execute(context, input) {
+    return {
+      summary: `list_open_tickets is scaffolded for tenant ${context.tenantId}.`,
+      data: [
+        {
+          status: "not_implemented",
+          query: input.query ?? null,
+          filters: input,
+          accountId: context.accountId
+        }
+      ],
+      source: "connector-scaffold"
+    };
+  }
+};
 
 function getHaloBaseUrl() {
   const value = process.env.HALOPSA_BASE_URL ?? process.env.HALOPSA_URL;
@@ -98,10 +199,7 @@ export const haloPsaAdapter: ProviderAdapter = {
         "get_customer_overview",
         "Use when the user wants a combined HaloPSA view of a customer with their core account details plus recent open ticket activity."
       ),
-      createStubTool(
-        "list_open_tickets",
-        "Use when the user wants a queue-style view of active tickets, open incidents, or tickets for a customer. Prefer this before get_ticket if the exact ticket id is unknown."
-      ),
+      haloListOpenTicketsTool,
       createStubTool(
         "get_ticket",
         "Use when the user gives a specific HaloPSA ticket number, id, or visible ticket reference and wants the full details for one ticket."
