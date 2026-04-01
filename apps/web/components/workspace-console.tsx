@@ -114,7 +114,15 @@ const initialState: DemoState = {
       status: "Disconnected",
       description: "Managed devices, endpoint operations, and technician context for MSP teams.",
       lastSync: "Not configured",
-      tools: ["list_devices_for_site", "search_documents", "find_contact"],
+      tools: [
+        "search_rmm_devices",
+        "get_rmm_device_overview",
+        "get_rmm_device_alerts",
+        "get_rmm_device_activities",
+        "list_devices_for_site",
+        "search_documents",
+        "find_contact"
+      ],
       realOAuth: true,
       logoUrl: "https://www.logo-designer.co/storage/2021/11/2021-it-firm-ninjaone-new-logo-design.png",
       accent: "ninja"

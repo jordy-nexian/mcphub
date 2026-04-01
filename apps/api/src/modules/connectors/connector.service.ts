@@ -632,6 +632,10 @@ export class ConnectorService {
       return this.executeHaloTool(tenantId, userId, roles, toolName, input);
     }
 
+    if (provider.provider === "ninjaone") {
+      return this.executeNinjaOneTool(tenantId, userId, roles, toolName, input);
+    }
+
     const tool = provider.getTools().find((candidate) => candidate.name === toolName);
     if (!tool) {
       throw new Error(`Tool ${toolName} not found`);
@@ -647,6 +651,49 @@ export class ConnectorService {
       },
       input
     );
+  }
+
+  private async executeNinjaOneTool(tenantId: string, userId: string, roles: string[], toolName: string, input: Record<string, unknown>) {
+    const account = (await this.store.findByTenantUser(tenantId, userId)).find(
+      (candidate) => candidate.provider === "ninjaone" && candidate.status === "ACTIVE"
+    );
+
+    if (!account) {
+      throw new Error(`No active NinjaOne account found for ${tenantId}/${userId}`);
+    }
+
+    const freshAccount = await this.ensureFreshAccount(account);
+    const accessToken = this.encryption.decrypt(freshAccount.accessTokenEncrypted);
+    const baseUrl = this.getNinjaOneBaseUrlForAccount(freshAccount);
+
+    switch (toolName) {
+      case "search_rmm_devices":
+      case "list_devices_for_site":
+        return this.searchNinjaOneDevices(baseUrl, accessToken, input);
+      case "get_rmm_device_overview":
+        return this.getNinjaOneDeviceOverview(baseUrl, accessToken, input);
+      case "get_rmm_device_alerts":
+        return this.getNinjaOneDeviceAlerts(baseUrl, accessToken, input);
+      case "get_rmm_device_activities":
+        return this.getNinjaOneDeviceActivities(baseUrl, accessToken, input);
+      default: {
+        const tool = this.registry.get("ninjaone")?.getTools().find((candidate) => candidate.name === toolName);
+        if (!tool) {
+          throw new Error(`NinjaOne tool ${toolName} not found`);
+        }
+
+        return tool.execute(
+          {
+            tenantId,
+            userId,
+            roles,
+            requestId: crypto.randomUUID(),
+            accountId: freshAccount.id
+          },
+          input
+        );
+      }
+    }
   }
 
   private async executeHaloTool(tenantId: string, userId: string, roles: string[], toolName: string, input: Record<string, unknown>) {
@@ -1106,6 +1153,252 @@ export class ConnectorService {
     };
   }
 
+  private buildNinjaOneHeaders(accessToken: string) {
+    return {
+      accept: "application/json",
+      authorization: `Bearer ${accessToken}`
+    };
+  }
+
+  private normalizeNinjaOneCollection(payload: unknown) {
+    return normalizeCollectionPayload(payload, [
+      "results",
+      "items",
+      "devices",
+      "data",
+      "alerts",
+      "activities"
+    ]);
+  }
+
+  private async fetchNinjaOneJson(baseUrl: string, accessToken: string, path: string, query?: Record<string, string | number | undefined>) {
+    const url = new URL(`${baseUrl}${path}`);
+    for (const [key, value] of Object.entries(query ?? {})) {
+      if (value !== undefined && value !== null && String(value).length > 0) {
+        url.searchParams.set(key, String(value));
+      }
+    }
+
+    const response = await fetch(url, {
+      headers: this.buildNinjaOneHeaders(accessToken)
+    });
+
+    if (!response.ok) {
+      const body = await response.text();
+      throw new Error(`NinjaOne request failed (${response.status}) for ${path}: ${body}`);
+    }
+
+    return response.json() as Promise<unknown>;
+  }
+
+  private async tryFetchNinjaOneJson(baseUrl: string, accessToken: string, path: string) {
+    const response = await fetch(`${baseUrl}${path}`, {
+      headers: this.buildNinjaOneHeaders(accessToken)
+    });
+
+    if (!response.ok) {
+      return undefined;
+    }
+
+    return response.json() as Promise<unknown>;
+  }
+
+  private pickDeviceId(input: Record<string, unknown>) {
+    const rawId =
+      input.id ??
+      input.deviceId ??
+      input.device_id ??
+      input.endpointId ??
+      input.endpoint_id;
+
+    if (typeof rawId === "number" || typeof rawId === "string") {
+      return String(rawId).trim();
+    }
+
+    const query = typeof input.query === "string" ? input.query.trim() : "";
+    if (/^\d+$/.test(query)) {
+      return query;
+    }
+
+    return "";
+  }
+
+  private mapNinjaOneDevice(device: Record<string, unknown>) {
+    return {
+      id: pickNumber(device, ["id", "deviceId", "device_id"]),
+      name: pickString(device, ["systemName", "displayName", "name", "hostname"]),
+      hostname: pickString(device, ["hostname", "dnsName", "systemName"]),
+      organization: pickString(device, ["organizationName", "organisationName", "customerName"]),
+      organizationId: pickNumber(device, ["organizationId", "organisationId", "customerId"]),
+      site: pickString(device, ["siteName", "locationName"]),
+      status: pickString(device, ["online", "status", "healthStatus"]),
+      os: pickString(device, ["osName", "operatingSystem", "os"]),
+      serialNumber: pickString(device, ["serialNumber", "serial"]),
+      lastSeen: pickString(device, ["lastContact", "lastSeen", "lastLoggedInUser"]),
+      raw: device
+    };
+  }
+
+  private async resolveNinjaOneDevice(baseUrl: string, accessToken: string, input: Record<string, unknown>) {
+    const deviceId = this.pickDeviceId(input);
+    if (deviceId) {
+      const payload = await this.fetchNinjaOneJson(baseUrl, accessToken, `/device/${deviceId}`);
+      return payload as Record<string, unknown>;
+    }
+
+    const query = typeof input.query === "string" ? input.query.trim() : "";
+    if (!query) {
+      throw new Error("A NinjaOne device id or search query is required");
+    }
+
+    const payload = await this.fetchNinjaOneJson(baseUrl, accessToken, "/devices", {
+      search: query
+    });
+    const devices = this.normalizeNinjaOneCollection(payload);
+    const matched = devices.find((device) =>
+      [pickString(device, ["systemName", "displayName", "name", "hostname", "serialNumber", "serial"])].some((candidate) =>
+        textMatches(candidate, query)
+      )
+    ) ?? devices[0];
+
+    if (!matched) {
+      throw new Error(`No NinjaOne device matched ${query}`);
+    }
+
+    const matchedId = pickNumber(matched, ["id", "deviceId", "device_id"]);
+    if (!matchedId) {
+      return matched;
+    }
+
+    const detail = await this.fetchNinjaOneJson(baseUrl, accessToken, `/device/${matchedId}`);
+    return detail as Record<string, unknown>;
+  }
+
+  private async searchNinjaOneDevices(baseUrl: string, accessToken: string, input: Record<string, unknown>) {
+    const query = typeof input.query === "string" ? input.query.trim() : "";
+    const organizationId = pickNumber(input, ["organizationId", "organisationId", "customerId", "siteId", "site_id"]);
+
+    const payload = await this.fetchNinjaOneJson(baseUrl, accessToken, "/devices", {
+      search: query || undefined,
+      organizationId
+    });
+    const devices = this.normalizeNinjaOneCollection(payload).slice(0, 50);
+
+    return {
+      summary:
+        devices.length > 0
+          ? `Found ${devices.length} NinjaOne devices. Results include device identity, organization, site, health, operating system, and serial information where available.`
+          : "No NinjaOne devices matched that search.",
+      data: devices.map((device) => this.mapNinjaOneDevice(device)),
+      source: "ninjaone"
+    };
+  }
+
+  private async getNinjaOneDeviceAlerts(baseUrl: string, accessToken: string, input: Record<string, unknown>) {
+    const device = await this.resolveNinjaOneDevice(baseUrl, accessToken, input);
+    const deviceId = pickNumber(device, ["id", "deviceId", "device_id"]);
+    if (!deviceId) {
+      throw new Error("Could not resolve a NinjaOne device id for alerts");
+    }
+
+    const payload = await this.fetchNinjaOneJson(baseUrl, accessToken, `/device/${deviceId}/alerts`);
+    const alerts = this.normalizeNinjaOneCollection(payload).slice(0, 50);
+
+    return {
+      summary:
+        alerts.length > 0
+          ? `Found ${alerts.length} NinjaOne alerts for device ${deviceId}. Results include severity, category, source, timestamps, and raw alert context where available.`
+          : `No NinjaOne alerts found for device ${deviceId}.`,
+      data: alerts.map((alert) => ({
+        id: pickNumber(alert, ["id", "alertId", "uid"]),
+        severity: pickString(alert, ["severity", "priority", "status"]),
+        category: pickString(alert, ["category", "type", "alertType"]),
+        message: pickString(alert, ["message", "title", "summary"]),
+        source: pickString(alert, ["source", "policyName", "checkName"]),
+        createdAt: pickString(alert, ["created", "createdAt", "raisedAt"]),
+        raw: alert
+      })),
+      source: "ninjaone"
+    };
+  }
+
+  private async getNinjaOneDeviceActivities(baseUrl: string, accessToken: string, input: Record<string, unknown>) {
+    const device = await this.resolveNinjaOneDevice(baseUrl, accessToken, input);
+    const deviceId = pickNumber(device, ["id", "deviceId", "device_id"]);
+    if (!deviceId) {
+      throw new Error("Could not resolve a NinjaOne device id for activities");
+    }
+
+    const payload = await this.fetchNinjaOneJson(baseUrl, accessToken, `/device/${deviceId}/activities`);
+    const activities = this.normalizeNinjaOneCollection(payload).slice(0, 50);
+
+    return {
+      summary:
+        activities.length > 0
+          ? `Found ${activities.length} NinjaOne activities for device ${deviceId}. Results include activity type, summary, user or source, and timestamps where available.`
+          : `No NinjaOne activities found for device ${deviceId}.`,
+      data: activities.map((activity) => ({
+        id: pickNumber(activity, ["id", "activityId"]),
+        type: pickString(activity, ["type", "activityType", "category"]),
+        summary: pickString(activity, ["summary", "message", "description"]),
+        actor: pickString(activity, ["userName", "actor", "source"]),
+        createdAt: pickString(activity, ["created", "createdAt", "timestamp"]),
+        raw: activity
+      })),
+      source: "ninjaone"
+    };
+  }
+
+  private async getNinjaOneDeviceOverview(baseUrl: string, accessToken: string, input: Record<string, unknown>) {
+    const device = await this.resolveNinjaOneDevice(baseUrl, accessToken, input);
+    const deviceId = pickNumber(device, ["id", "deviceId", "device_id"]);
+    if (!deviceId) {
+      throw new Error("Could not resolve a NinjaOne device id");
+    }
+
+    const [alertsPayload, activitiesPayload, disksPayload] = await Promise.all([
+      this.tryFetchNinjaOneJson(baseUrl, accessToken, `/device/${deviceId}/alerts`),
+      this.tryFetchNinjaOneJson(baseUrl, accessToken, `/device/${deviceId}/activities`),
+      this.tryFetchNinjaOneJson(baseUrl, accessToken, `/device/${deviceId}/volumes`)
+        .then((payload) => payload ?? this.tryFetchNinjaOneJson(baseUrl, accessToken, `/device/${deviceId}/disks`))
+    ]);
+
+    const alerts = alertsPayload ? this.normalizeNinjaOneCollection(alertsPayload).slice(0, 10) : [];
+    const activities = activitiesPayload ? this.normalizeNinjaOneCollection(activitiesPayload).slice(0, 10) : [];
+    const disks = disksPayload ? this.normalizeNinjaOneCollection(disksPayload).slice(0, 20) : [];
+    const mappedDevice = this.mapNinjaOneDevice(device);
+
+    return {
+      summary: `Loaded NinjaOne device ${mappedDevice.name ?? deviceId}. Results include endpoint identity, health context, alerts, recent activities, and storage information where the API exposes it.`,
+      data: [
+        {
+          ...mappedDevice,
+          alerts: alerts.map((alert) => ({
+            id: pickNumber(alert, ["id", "alertId", "uid"]),
+            severity: pickString(alert, ["severity", "priority", "status"]),
+            message: pickString(alert, ["message", "title", "summary"]),
+            source: pickString(alert, ["source", "policyName", "checkName"]),
+            createdAt: pickString(alert, ["created", "createdAt", "raisedAt"])
+          })),
+          activities: activities.map((activity) => ({
+            id: pickNumber(activity, ["id", "activityId"]),
+            type: pickString(activity, ["type", "activityType", "category"]),
+            summary: pickString(activity, ["summary", "message", "description"]),
+            createdAt: pickString(activity, ["created", "createdAt", "timestamp"])
+          })),
+          disks: disks.map((disk) => ({
+            name: pickString(disk, ["name", "label", "mountPoint", "device"]),
+            totalBytes: pickNumber(disk, ["size", "totalBytes", "capacity"]),
+            freeBytes: pickNumber(disk, ["free", "freeBytes", "available"]),
+            usedPercent: pickNumber(disk, ["usedPercent", "usagePercent", "percentUsed"]),
+            fileSystem: pickString(disk, ["fileSystem", "filesystem", "fsType"])
+          }))
+        }
+      ],
+      source: "ninjaone"
+    };
+  }
+
   private async getRecentHaloInvoices(baseUrl: string, accessToken: string, input: Record<string, unknown>) {
     const countValue = typeof input.count === "number" ? input.count : typeof input.count === "string" ? Number(input.count) : 25;
     const count = Number.isFinite(countValue) ? Math.min(Math.max(countValue, 1), 50) : 25;
@@ -1483,6 +1776,16 @@ export class ConnectorService {
     return baseUrl;
   }
 
+  private getNinjaOneBaseUrlForAccount(account: ConnectedAccountRecord) {
+    const metadata = (account.metadataJson ?? {}) as StoredConnectorConfig;
+    const baseUrl = this.normalizeNinjaOneBaseUrl(metadata.apiUrl ?? process.env.NINJAONE_BASE_URL ?? process.env.NINJAONE_URL);
+    if (!baseUrl) {
+      throw new Error("Set NinjaOne API URL in connector settings or NINJAONE_BASE_URL in the environment");
+    }
+
+    return baseUrl;
+  }
+
   private async resolveHaloConfig(tenantId: string) {
     const stored = ((await this.configStore.get(tenantId, "halopsa"))?.configJson ?? {}) as StoredConnectorConfig;
     const apiUrl = this.normalizeHaloBaseUrl(stored.apiUrl ?? process.env.HALOPSA_BASE_URL ?? process.env.HALOPSA_URL);
@@ -1529,7 +1832,7 @@ export class ConnectorService {
       this.normalizeNinjaOneRedirectUri(stored.redirectUri)
       ?? this.normalizeNinjaOneRedirectUri(process.env.NINJAONE_REDIRECT_URI)
       ?? `${config.apiUrl}/oauth/ninjaone/callback`;
-    const scopes = stored.scopes ?? (process.env.NINJAONE_SCOPES ?? "monitoring devices organizations").split(/\s+/).filter(Boolean);
+    const scopes = stored.scopes ?? (process.env.NINJAONE_SCOPES ?? "monitoring management control").split(/\s+/).filter(Boolean);
 
     if (!apiUrl || !authUrl || !clientId) {
       throw new Error("NinjaOne requires API URL and client ID in connector settings before connecting");
