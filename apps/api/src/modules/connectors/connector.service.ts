@@ -127,6 +127,82 @@ function textMatches(value: string | undefined, query: string) {
   return value.toLowerCase().includes(query.toLowerCase());
 }
 
+function normalizeWhitespace(value: string) {
+  return value.replace(/\s+/g, " ").trim();
+}
+
+function extractMeaningfulQuery(query: string | undefined, noisePatterns: RegExp[] = []) {
+  if (!query) {
+    return "";
+  }
+
+  let normalized = normalizeWhitespace(query.toLowerCase());
+  for (const pattern of noisePatterns) {
+    normalized = normalized.replace(pattern, " ");
+  }
+
+  normalized = normalized
+    .replace(/\b(show|find|get|list|give me|tell me|search|lookup|for me|please)\b/g, " ")
+    .replace(/[?.,]+/g, " ");
+
+  return normalizeWhitespace(normalized);
+}
+
+function wantsOpenItems(input: Record<string, unknown>, query: string | undefined) {
+  if (typeof input.includeClosed === "boolean") {
+    return !input.includeClosed;
+  }
+
+  const normalized = query?.toLowerCase() ?? "";
+  if (!normalized) {
+    return true;
+  }
+
+  if (/\b(all|closed|resolved|completed|cancelled|canceled|archived)\b/.test(normalized)) {
+    return false;
+  }
+
+  return /\b(open|active|outstanding|recent|current|live|in progress|in-progress)\b/.test(normalized) || true;
+}
+
+function isProjectOpen(record: HaloGenericRecord) {
+  const statusName = pickString(record, ["status_name", "status", "project_status", "projectStatus"])?.toLowerCase();
+  if (!statusName) {
+    return true;
+  }
+
+  return !["closed", "completed", "cancelled", "canceled", "resolved", "archived"].some((keyword) =>
+    statusName.includes(keyword)
+  );
+}
+
+function deviceMatchesUserHint(device: Record<string, unknown>, userHint: string) {
+  if (!userHint) {
+    return true;
+  }
+
+  const lowered = userHint.toLowerCase();
+  const candidates = [
+    pickString(device, ["lastLoggedInUser", "currentUser", "loggedInUser", "assignedUser", "userName", "username"]),
+    pickString(device, ["primaryUser", "owner", "contactName", "user", "displayName"]),
+    pickString(device, ["organizationName", "organisationName", "customerName"])
+  ].filter(Boolean) as string[];
+
+  return candidates.some((candidate) => candidate.toLowerCase().includes(lowered));
+}
+
+function extractUserHint(query: string | undefined) {
+  if (!query) {
+    return "";
+  }
+
+  const match =
+    query.match(/\bdevices?\s+(?:for|used by|belonging to|assigned to)\s+(.+)$/i) ??
+    query.match(/\bfor\s+(.+)$/i);
+
+  return normalizeWhitespace(match?.[1] ?? "");
+}
+
 const haloDebugEnabled = process.env.HALO_DEBUG === "true";
 
 function logHaloDebug(event: string, payload: Record<string, unknown>) {
@@ -757,7 +833,15 @@ export class ConnectorService {
   }
 
   private async listOpenHaloTickets(baseUrl: string, accessToken: string, input: Record<string, unknown>) {
-    const query = typeof input.query === "string" ? input.query.trim() : undefined;
+    const rawQuery = typeof input.query === "string" ? input.query.trim() : undefined;
+    const query = extractMeaningfulQuery(rawQuery, [
+      /\bopen\b/g,
+      /\brecent\b/g,
+      /\btickets?\b/g,
+      /\bincidents?\b/g,
+      /\brequests?\b/g,
+      /\bfor\b/g
+    ]);
     const explicitClientId =
       pickNumber(input, ["clientId", "client_id"]) ??
       pickNumber(input, ["customerId", "customer_id"]) ??
@@ -784,7 +868,7 @@ export class ConnectorService {
 
     const url = new URL(`${baseUrl}/api/tickets`);
     url.searchParams.set("count", "50");
-    url.searchParams.set("includeclosed", "false");
+    url.searchParams.set("includeclosed", wantsOpenItems(input, rawQuery) ? "false" : "true");
     if (clientId) {
       url.searchParams.set("client_id", String(clientId));
     } else if (query) {
@@ -823,8 +907,8 @@ export class ConnectorService {
     return {
       summary:
         openTickets.length > 0
-          ? `Found ${openTickets.length} open HaloPSA tickets${resolvedCustomerName ? ` for ${resolvedCustomerName}` : ""}. Results include ticket id, summary, status, customer, priority, and last action time.`
-          : `No open HaloPSA tickets found${resolvedCustomerName ? ` for ${resolvedCustomerName}` : ""}.`,
+          ? `Found ${openTickets.length} ${wantsOpenItems(input, rawQuery) ? "open " : ""}HaloPSA tickets${resolvedCustomerName ? ` for ${resolvedCustomerName}` : ""}. Results are condensed to ticket id, summary, status, customer, priority, and latest update.`
+          : `No ${wantsOpenItems(input, rawQuery) ? "open " : ""}HaloPSA tickets found${resolvedCustomerName ? ` for ${resolvedCustomerName}` : ""}.`,
       data: openTickets.map((ticket) => ({
         id: pickNumber(ticket, ["id", "ticket_id", "TicketID"]),
         summary: pickString(ticket, ["summary", "subject", "title"]) ?? "Untitled ticket",
@@ -974,9 +1058,16 @@ export class ConnectorService {
   }
 
   private async searchHaloProjects(baseUrl: string, accessToken: string, input: Record<string, unknown>) {
-    const query = typeof input.query === "string" ? input.query.trim() : "";
+    const rawQuery = typeof input.query === "string" ? input.query.trim() : "";
+    const query = extractMeaningfulQuery(rawQuery, [
+      /\bopen\b/g,
+      /\bactive\b/g,
+      /\bprojects?\b/g,
+      /\bfor\b/g
+    ]);
+    const openOnly = wantsOpenItems(input, rawQuery);
     const url = new URL(`${baseUrl}/api/projects`);
-    url.searchParams.set("count", "25");
+    url.searchParams.set("count", "50");
     if (query) {
       url.searchParams.set("search", query);
     }
@@ -991,13 +1082,15 @@ export class ConnectorService {
     }
 
     const payload = (await response.json()) as unknown;
-    const projects = normalizeCollectionPayload(payload, ["projects"]).slice(0, 25);
+    const projects = normalizeCollectionPayload(payload, ["projects"])
+      .filter((project) => (openOnly ? isProjectOpen(project) : true))
+      .slice(0, 25);
 
     return {
       summary:
         projects.length > 0
-          ? `Found ${projects.length} HaloPSA projects. Results include project id, summary, status, customer, and manager where available.`
-          : "No HaloPSA projects matched that query.",
+          ? `Found ${projects.length} ${openOnly ? "open " : ""}HaloPSA projects. Results are condensed to project id, summary, status, customer, and manager.`
+          : `No ${openOnly ? "open " : ""}HaloPSA projects matched that query.`,
       data: projects.map((project) => ({
         id: pickNumber(project, ["id", "project_id", "ticket_id"]),
         summary: pickString(project, ["summary", "name", "title"]),
@@ -1275,19 +1368,38 @@ export class ConnectorService {
   }
 
   private async searchNinjaOneDevices(baseUrl: string, accessToken: string, input: Record<string, unknown>) {
-    const query = typeof input.query === "string" ? input.query.trim() : "";
+    const rawQuery = typeof input.query === "string" ? input.query.trim() : "";
+    const userHint = extractUserHint(rawQuery);
+    const query = extractMeaningfulQuery(rawQuery, [
+      /\bdevices?\b/g,
+      /\bdevice\b/g,
+      /\bendpoints?\b/g,
+      /\bendpoint\b/g,
+      /\bfor\b/g,
+      /\bused by\b/g,
+      /\bbelonging to\b/g,
+      /\bassigned to\b/g
+    ]);
     const organizationId = pickNumber(input, ["organizationId", "organisationId", "customerId", "siteId", "site_id"]);
 
     const payload = await this.fetchNinjaOneJson(baseUrl, accessToken, "/devices", {
       search: query || undefined,
       organizationId
     });
-    const devices = this.normalizeNinjaOneCollection(payload).slice(0, 50);
+    const allDevices = this.normalizeNinjaOneCollection(payload);
+    const devices = allDevices
+      .filter((device) => deviceMatchesUserHint(device, userHint))
+      .sort((left, right) => {
+        const leftScore = Number(deviceMatchesUserHint(left, userHint)) + Number(textMatches(pickString(left, ["systemName", "displayName", "hostname", "name"]), query));
+        const rightScore = Number(deviceMatchesUserHint(right, userHint)) + Number(textMatches(pickString(right, ["systemName", "displayName", "hostname", "name"]), query));
+        return rightScore - leftScore;
+      })
+      .slice(0, 50);
 
     return {
       summary:
         devices.length > 0
-          ? `Found ${devices.length} NinjaOne devices. Results include device identity, organization, site, health, operating system, and serial information where available.`
+          ? `Found ${devices.length} NinjaOne devices${userHint ? ` related to ${userHint}` : ""}. Results are condensed to device identity, organization, site, health, operating system, and serial information.`
           : "No NinjaOne devices matched that search.",
       data: devices.map((device) => this.mapNinjaOneDevice(device)),
       source: "ninjaone"
