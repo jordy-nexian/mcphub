@@ -214,7 +214,7 @@ thead th { color: #b9d7e6; font-size: 0.78rem; font-weight: 700; letter-spacing:
 .sidebar-signout { width: 100%; }
 
 .main-content { padding: 28px; }
-.main-content-inner { display: flex; flex-direction: column; gap: 24px; }
+.main-content-inner { display: flex; flex-direction: column; gap: 24px; width: 100%; }
 .page-header { display: flex; justify-content: space-between; gap: 20px; align-items: flex-end; }
 .page-header-content { display: flex; flex-direction: column; gap: 8px; }
 .page-header h1 { font-size: clamp(2rem, 3vw, 3rem); line-height: 1.02; letter-spacing: -0.03em; }
@@ -306,8 +306,8 @@ thead th { color: #b9d7e6; font-size: 0.78rem; font-weight: 700; letter-spacing:
 .danger-text { color: #ffb3b3; }
 
 .dashboard-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
-.connector-catalog-panel { grid-column: 1 / -1; }
-.connector-catalog-panel .connector-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.connector-catalog-panel { grid-column: 1 / -1; width: 100%; }
+.connector-catalog-panel .connector-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); width: 100%; }
 .permission-list, .timeline, .tenant-health-list { display: flex; flex-direction: column; gap: 14px; }
 .permission-item {
   padding: 18px 20px;

@@ -921,7 +921,7 @@ export function WorkspaceConsole({
       </section>
 
       <section className="dashboard-grid">
-        <article className="panel stack">
+        <article className="panel stack connector-catalog-panel">
           <div className="section-heading">
             <div>
               <span className="eyebrow">Connectors</span>
