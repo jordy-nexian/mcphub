@@ -163,23 +163,23 @@ function isProjectStyleTicket(ticket: HaloTicketRecord) {
     "itil_requesttype_name",
     "itil_requesttype"
   ]);
-  const category = pickString(ticket, [
-    "category_1_name",
-    "category_2_name",
-    "category_3_name",
-    "category_4_name",
-    "category_name",
-    "category"
-  ]);
   const team = pickString(ticket, ["team_name", "team"]);
-  const summary = pickString(ticket, ["summary", "subject", "title"]);
+  const normalizedRequestType = requestType?.trim().toLowerCase();
+  const normalizedTeam = team?.trim().toLowerCase();
 
-  const combined = [requestType, category, team, summary]
-    .filter(Boolean)
-    .join(" ")
-    .toLowerCase();
+  const projectRequestTypes = new Set([
+    "project (internal)",
+    "project (internal task)",
+    "project task",
+    "project scoping",
+    "project"
+  ]);
+  const projectQueues = new Set(["projects (internal)", "project engineers"]);
 
-  return /\b(project|projects|project delivery|implementation|release|deployment|change request)\b/.test(combined);
+  return (
+    (normalizedRequestType ? projectRequestTypes.has(normalizedRequestType) : false) ||
+    (normalizedTeam ? projectQueues.has(normalizedTeam) : false)
+  );
 }
 
 function dedupeTicketsById(tickets: HaloTicketRecord[]) {
