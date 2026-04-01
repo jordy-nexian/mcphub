@@ -1015,7 +1015,7 @@ export class ConnectorService {
     let matchedCustomerNames: string[] = [];
 
     if (!clientId && query) {
-      const customerLookup = await this.lookupHaloCustomers(baseUrl, accessToken, query, 10);
+      const customerLookup = await this.lookupHaloCustomers(baseUrl, accessToken, query, 50);
       const matchingCustomers = customerLookup.filter((customer) =>
         [
           pickString(customer, ["name", "client_name"]),
@@ -1041,26 +1041,36 @@ export class ConnectorService {
       (typeof input.query === "string" && /\b(all)\b/i.test(input.query) ? 250 : 100);
     const limit = Math.max(1, Math.min(requestedLimit, 100));
     const includeClosed = !wantsOpenItems(input, rawQuery);
-    const fetchedTicketGroups =
-      matchedClientIds.length > 1
-        ? await Promise.all(
-            matchedClientIds.map((matchedId) =>
-              this.fetchHaloTickets(baseUrl, accessToken, {
-                clientId: matchedId,
-                query,
-                includeClosed,
-                limit
-              })
-            )
-          )
-        : [
-            await this.fetchHaloTickets(baseUrl, accessToken, {
-              clientId,
+    const fetchedTicketGroups = await Promise.all([
+      ...(matchedClientIds.length > 0
+        ? matchedClientIds.map((matchedId) =>
+            this.fetchHaloTickets(baseUrl, accessToken, {
+              clientId: matchedId,
               query,
               includeClosed,
               limit
             })
-          ];
+          )
+        : []),
+      ...(query
+        ? [
+            this.fetchHaloTickets(baseUrl, accessToken, {
+              query,
+              includeClosed,
+              limit
+            })
+          ]
+        : matchedClientIds.length === 0
+          ? [
+              this.fetchHaloTickets(baseUrl, accessToken, {
+                clientId,
+                query,
+                includeClosed,
+                limit
+              })
+            ]
+          : [])
+    ]);
     const tickets = dedupeTicketsById(fetchedTicketGroups.flat());
 
     const openTickets = tickets
@@ -1075,8 +1085,18 @@ export class ConnectorService {
           return true;
         }
 
-        const ticketCustomerName = pickString(ticket, ["client_name", "customer_name", "organisation_name"]);
-        return Boolean(ticketCustomerName && matchedCustomerNames.some((name) => ticketCustomerName === name));
+        const ticketCustomerName = pickString(ticket, [
+          "client_name",
+          "customer_name",
+          "organisation_name",
+          "site_name",
+          "location_name"
+        ]);
+        return Boolean(
+          ticketCustomerName &&
+            (matchedCustomerNames.some((name) => textMatches(ticketCustomerName, name) || textMatches(name, ticketCustomerName)) ||
+              (query ? textMatches(ticketCustomerName, query) : false))
+        );
       })
       .slice(0, limit);
 
