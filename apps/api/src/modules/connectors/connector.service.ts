@@ -233,6 +233,12 @@ function extractUserHint(query: string | undefined) {
   return normalizeWhitespace(match?.[1] ?? "");
 }
 
+type ResolvedEntityHints = {
+  userHints: string[];
+  organizationHints: string[];
+  emailHints: string[];
+};
+
 const haloDebugEnabled = process.env.HALO_DEBUG === "true";
 
 function logHaloDebug(event: string, payload: Record<string, unknown>) {
@@ -775,7 +781,7 @@ export class ConnectorService {
     switch (toolName) {
       case "search_rmm_devices":
       case "list_devices_for_site":
-        return this.searchNinjaOneDevices(baseUrl, accessToken, input);
+        return this.searchNinjaOneDevices(tenantId, userId, baseUrl, accessToken, input);
       case "get_rmm_device_overview":
         return this.getNinjaOneDeviceOverview(baseUrl, accessToken, input);
       case "get_rmm_device_alerts":
@@ -1025,6 +1031,70 @@ export class ConnectorService {
 
     const payload = (await response.json()) as HaloClientRecord[] | { clients?: HaloClientRecord[] };
     return Array.isArray(payload) ? payload : (payload.clients ?? []);
+  }
+
+  private async resolveHaloEntityHints(tenantId: string, userId: string, query: string): Promise<ResolvedEntityHints> {
+    const hints: ResolvedEntityHints = {
+      userHints: [],
+      organizationHints: [],
+      emailHints: []
+    };
+
+    const haloAccount = (await this.store.findByTenantUser(tenantId, userId)).find(
+      (candidate) => candidate.provider === "halopsa" && candidate.status === "ACTIVE"
+    );
+    if (!haloAccount) {
+      return hints;
+    }
+
+    const freshHalo = await this.ensureFreshAccount(haloAccount);
+    const haloToken = this.encryption.decrypt(freshHalo.accessTokenEncrypted);
+    const haloBaseUrl = this.getHaloBaseUrlForAccount(freshHalo);
+
+    try {
+      const customers = await this.lookupHaloCustomers(haloBaseUrl, haloToken, query, 10);
+      const matchedCustomer =
+        customers.find((customer) =>
+          [
+            pickString(customer, ["name", "client_name", "organisation_name", "customer_name"]),
+            pickString(customer, ["reference", "client_reference", "ref"])
+          ].some((candidate) => textMatches(candidate, query))
+        ) ?? customers[0];
+
+      if (matchedCustomer) {
+        const customerName = pickString(matchedCustomer, ["name", "client_name", "organisation_name", "customer_name"]);
+        if (customerName) {
+          hints.organizationHints.push(customerName);
+        }
+      }
+    } catch {
+      // Optional enrichment only.
+    }
+
+    try {
+      const contactResult = await this.findHaloContact(haloBaseUrl, haloToken, { query });
+      for (const row of contactResult.data as Record<string, unknown>[]) {
+        const name = pickString(row, ["name"]);
+        const email = pickString(row, ["email"]);
+        const customer = pickString(row, ["customer"]);
+        if (name) {
+          hints.userHints.push(name);
+        }
+        if (email) {
+          hints.emailHints.push(email);
+        }
+        if (customer) {
+          hints.organizationHints.push(customer);
+        }
+      }
+    } catch {
+      // Optional enrichment only.
+    }
+
+    hints.userHints = [...new Set(hints.userHints.map((value) => value.trim()).filter(Boolean))];
+    hints.organizationHints = [...new Set(hints.organizationHints.map((value) => value.trim()).filter(Boolean))];
+    hints.emailHints = [...new Set(hints.emailHints.map((value) => value.trim()).filter(Boolean))];
+    return hints;
   }
 
   private async listHaloTicketActions(baseUrl: string, accessToken: string, input: Record<string, unknown>) {
@@ -1402,7 +1472,13 @@ export class ConnectorService {
     return detail as Record<string, unknown>;
   }
 
-  private async searchNinjaOneDevices(baseUrl: string, accessToken: string, input: Record<string, unknown>) {
+  private async searchNinjaOneDevices(
+    tenantId: string,
+    userId: string,
+    baseUrl: string,
+    accessToken: string,
+    input: Record<string, unknown>
+  ) {
     const rawQuery = typeof input.query === "string" ? input.query.trim() : "";
     const userHint = extractUserHint(rawQuery);
     const query = extractMeaningfulQuery(rawQuery, [
@@ -1416,6 +1492,11 @@ export class ConnectorService {
       /\bassigned to\b/g
     ]);
     const organizationId = pickNumber(input, ["organizationId", "organisationId", "customerId", "siteId", "site_id"]);
+    const haloHints = rawQuery ? await this.resolveHaloEntityHints(tenantId, userId, rawQuery) : undefined;
+    const effectiveUserHints = [userHint, ...(haloHints?.userHints ?? []), ...(haloHints?.emailHints ?? [])]
+      .map((value) => value.trim())
+      .filter(Boolean);
+    const effectiveOrganizationHints = (haloHints?.organizationHints ?? []).map((value) => value.trim()).filter(Boolean);
 
     const payload = await this.fetchNinjaOneJson(baseUrl, accessToken, "/devices", {
       search: query || undefined,
@@ -1423,10 +1504,38 @@ export class ConnectorService {
     });
     const allDevices = this.normalizeNinjaOneCollection(payload);
     const devices = allDevices
-      .filter((device) => deviceMatchesUserHint(device, userHint))
+      .filter((device) => {
+        if (effectiveUserHints.length === 0 && effectiveOrganizationHints.length === 0) {
+          return true;
+        }
+
+        const userMatch =
+          effectiveUserHints.length === 0 ||
+          effectiveUserHints.some((hint) => deviceMatchesUserHint(device, hint));
+        const organizationCandidate = pickString(device, ["organizationName", "organisationName", "customerName", "siteName"]);
+        const organizationMatch =
+          effectiveOrganizationHints.length === 0 ||
+          effectiveOrganizationHints.some((hint) => textMatches(organizationCandidate, hint));
+
+        return userMatch || organizationMatch;
+      })
       .sort((left, right) => {
-        const leftScore = Number(deviceMatchesUserHint(left, userHint)) + Number(textMatches(pickString(left, ["systemName", "displayName", "hostname", "name"]), query));
-        const rightScore = Number(deviceMatchesUserHint(right, userHint)) + Number(textMatches(pickString(right, ["systemName", "displayName", "hostname", "name"]), query));
+        const leftScore =
+          Number(
+            effectiveUserHints.some((hint) => deviceMatchesUserHint(left, hint)) ||
+              effectiveOrganizationHints.some((hint) =>
+                textMatches(pickString(left, ["organizationName", "organisationName", "customerName", "siteName"]), hint)
+              )
+          ) +
+          Number(textMatches(pickString(left, ["systemName", "displayName", "hostname", "name"]), query));
+        const rightScore =
+          Number(
+            effectiveUserHints.some((hint) => deviceMatchesUserHint(right, hint)) ||
+              effectiveOrganizationHints.some((hint) =>
+                textMatches(pickString(right, ["organizationName", "organisationName", "customerName", "siteName"]), hint)
+              )
+          ) +
+          Number(textMatches(pickString(right, ["systemName", "displayName", "hostname", "name"]), query));
         return rightScore - leftScore;
       })
       .slice(0, 50);
@@ -1434,7 +1543,11 @@ export class ConnectorService {
     return {
       summary:
         devices.length > 0
-          ? `Found ${devices.length} NinjaOne devices${userHint ? ` related to ${userHint}` : ""}. Results are condensed to device identity, organization, site, health, operating system, and serial information.`
+          ? `Found ${devices.length} NinjaOne devices${
+              effectiveUserHints[0] || effectiveOrganizationHints[0]
+                ? ` related to ${effectiveUserHints[0] ?? effectiveOrganizationHints[0]}`
+                : ""
+            }. Results are condensed to device identity, organization, site, health, operating system, and serial information.`
           : "No NinjaOne devices matched that search.",
       data: devices.map((device) => this.mapNinjaOneDevice(device)),
       source: "ninjaone"
