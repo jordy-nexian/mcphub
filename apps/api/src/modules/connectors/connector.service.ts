@@ -100,6 +100,28 @@ function extractHaloTickets(payload: unknown) {
   return normalizeCollectionPayload(payload, ["tickets", "results", "data", "records"]);
 }
 
+function dedupeTicketsById(tickets: HaloTicketRecord[]) {
+  const seen = new Set<string>();
+  const deduped: HaloTicketRecord[] = [];
+
+  for (const ticket of tickets) {
+    const key = String(
+      pickNumber(ticket, ["id", "ticket_id", "TicketID", "ticketnumber", "ticket_number"]) ??
+        pickString(ticket, ["id", "ticket_id", "TicketID", "ticketnumber", "ticket_number"]) ??
+        JSON.stringify(ticket)
+    );
+
+    if (seen.has(key)) {
+      continue;
+    }
+
+    seen.add(key);
+    deduped.push(ticket);
+  }
+
+  return deduped;
+}
+
 function isTicketOpen(record: HaloTicketRecord) {
   const closedCandidates = [
     record.closed,
@@ -989,10 +1011,12 @@ export class ConnectorService {
 
     let clientId = explicitClientId;
     let resolvedCustomerName: string | undefined;
+    let matchedClientIds: number[] = explicitClientId ? [explicitClientId] : [];
+    let matchedCustomerNames: string[] = [];
 
     if (!clientId && query) {
       const customerLookup = await this.lookupHaloCustomers(baseUrl, accessToken, query, 10);
-      const matchedCustomer = customerLookup.find((customer) =>
+      const matchingCustomers = customerLookup.filter((customer) =>
         [
           pickString(customer, ["name", "client_name"]),
           pickString(customer, ["reference", "client_reference", "ref"]),
@@ -1000,37 +1024,59 @@ export class ConnectorService {
         ].some((candidate) => textMatches(candidate, query))
       );
 
-      clientId = matchedCustomer ? pickNumber(matchedCustomer, ["id", "client_id"]) : undefined;
-      resolvedCustomerName = matchedCustomer
-        ? pickString(matchedCustomer, ["name", "client_name", "organisation_name", "customer_name"])
-        : undefined;
+      const selectedCustomers = matchingCustomers.length > 0 ? matchingCustomers : customerLookup.slice(0, 1);
+      matchedClientIds = selectedCustomers
+        .map((customer) => pickNumber(customer, ["id", "client_id"]))
+        .filter((value): value is number => typeof value === "number");
+      matchedCustomerNames = selectedCustomers
+        .map((customer) => pickString(customer, ["name", "client_name", "organisation_name", "customer_name"]))
+        .filter((value): value is string => typeof value === "string");
+
+      clientId = matchedClientIds[0];
+      resolvedCustomerName = matchedCustomerNames[0];
     }
 
     const requestedLimit =
       pickNumber(input, ["limit", "count", "top"]) ??
       (typeof input.query === "string" && /\b(all)\b/i.test(input.query) ? 250 : 100);
     const limit = Math.max(1, Math.min(requestedLimit, 100));
-    const tickets = await this.fetchHaloTickets(baseUrl, accessToken, {
-      clientId,
-      query,
-      includeClosed: !wantsOpenItems(input, rawQuery),
-      limit
-    });
+    const includeClosed = !wantsOpenItems(input, rawQuery);
+    const fetchedTicketGroups =
+      matchedClientIds.length > 1
+        ? await Promise.all(
+            matchedClientIds.map((matchedId) =>
+              this.fetchHaloTickets(baseUrl, accessToken, {
+                clientId: matchedId,
+                query,
+                includeClosed,
+                limit
+              })
+            )
+          )
+        : [
+            await this.fetchHaloTickets(baseUrl, accessToken, {
+              clientId,
+              query,
+              includeClosed,
+              limit
+            })
+          ];
+    const tickets = dedupeTicketsById(fetchedTicketGroups.flat());
 
     const openTickets = tickets
       .filter(isTicketOpen)
       .filter((ticket) => {
-        if (!clientId) {
+        if (matchedClientIds.length === 0) {
           return true;
         }
 
         const ticketClientId = pickNumber(ticket, ["client_id", "clientid", "organisation_id", "customer_id"]);
-        if (ticketClientId && ticketClientId === clientId) {
+        if (ticketClientId && matchedClientIds.includes(ticketClientId)) {
           return true;
         }
 
         const ticketCustomerName = pickString(ticket, ["client_name", "customer_name", "organisation_name"]);
-        return Boolean(resolvedCustomerName && ticketCustomerName === resolvedCustomerName);
+        return Boolean(ticketCustomerName && matchedCustomerNames.some((name) => ticketCustomerName === name));
       })
       .slice(0, limit);
 
