@@ -35,6 +35,7 @@ type StoredConnectorConfig = {
 
 type N8nWorkflowRecord = Record<string, unknown>;
 type N8nExecutionRecord = Record<string, unknown>;
+type HaloStatusRecord = Record<string, unknown>;
 
 function pickString(record: Record<string, unknown>, keys: string[]) {
   for (const key of keys) {
@@ -98,6 +99,24 @@ function getHaloTicketStatus(record: HaloTicketRecord) {
 
 function extractHaloTickets(payload: unknown) {
   return normalizeCollectionPayload(payload, ["tickets", "results", "data", "records"]);
+}
+
+function buildSearchAliases(query: string, names: string[] = []) {
+  const rawCandidates = [query, ...names]
+    .flatMap((value) => [value, ...value.split(/[()/,-]/)])
+    .map((value) => normalizeWhitespace(value))
+    .filter(Boolean);
+
+  const aliases = new Set<string>();
+  for (const candidate of rawCandidates) {
+    aliases.add(candidate);
+    const words = candidate.split(/\s+/).filter((word) => word.length >= 4);
+    for (const word of words) {
+      aliases.add(word);
+    }
+  }
+
+  return [...aliases].filter((value) => value.length >= 3);
 }
 
 function dedupeTicketsById(tickets: HaloTicketRecord[]) {
@@ -409,6 +428,7 @@ export class ConnectorService {
   private readonly refreshService = new TokenRefreshService(this.redis, this.encryption);
   private readonly store = ConnectedAccountStore.createDefault();
   private readonly configStore = ConnectorConfigStore.createDefault();
+  private readonly haloStatusCache = new Map<string, { expiresAt: number; records: HaloStatusRecord[] }>();
 
   constructor(private readonly auditService: AuditService) {
     this.redis?.on("error", (error) => {
@@ -1041,6 +1061,7 @@ export class ConnectorService {
       (typeof input.query === "string" && /\b(all)\b/i.test(input.query) ? 250 : 100);
     const limit = Math.max(1, Math.min(requestedLimit, 100));
     const includeClosed = !wantsOpenItems(input, rawQuery);
+    const searchAliases = query ? buildSearchAliases(query, matchedCustomerNames) : [];
     const fetchedTicketGroups = await Promise.all([
       ...(matchedClientIds.length > 0
         ? matchedClientIds.map((matchedId) =>
@@ -1052,14 +1073,14 @@ export class ConnectorService {
             })
           )
         : []),
-      ...(query
-        ? [
+      ...(searchAliases.length > 0
+        ? searchAliases.map((alias) =>
             this.fetchHaloTickets(baseUrl, accessToken, {
-              query,
+              query: alias,
               includeClosed,
               limit
             })
-          ]
+          )
         : matchedClientIds.length === 0
           ? [
               this.fetchHaloTickets(baseUrl, accessToken, {
@@ -1100,15 +1121,22 @@ export class ConnectorService {
       })
       .slice(0, limit);
 
+    const normalizedStatuses = await Promise.all(
+      openTickets.map(async (ticket) => ({
+        ticket,
+        status: await this.resolveHaloTicketStatusName(baseUrl, accessToken, ticket)
+      }))
+    );
+
     return {
       summary:
-        openTickets.length > 0
-          ? `Found ${openTickets.length} ${wantsOpenItems(input, rawQuery) ? "open " : ""}HaloPSA tickets${resolvedCustomerName ? ` for ${resolvedCustomerName}` : ""}. Results are condensed to ticket id, summary, status, customer, priority, and latest update.`
+        normalizedStatuses.length > 0
+          ? `Found ${normalizedStatuses.length} ${wantsOpenItems(input, rawQuery) ? "open " : ""}HaloPSA tickets${resolvedCustomerName ? ` for ${resolvedCustomerName}` : ""}. Results are condensed to ticket id, summary, status, customer, priority, and latest update.`
           : `No ${wantsOpenItems(input, rawQuery) ? "open " : ""}HaloPSA tickets found${resolvedCustomerName ? ` for ${resolvedCustomerName}` : ""}.`,
-      data: openTickets.map((ticket) => ({
+      data: normalizedStatuses.map(({ ticket, status }) => ({
         id: pickNumber(ticket, ["id", "ticket_id", "TicketID"]),
         summary: pickString(ticket, ["summary", "subject", "title"]) ?? "Untitled ticket",
-        status: getHaloTicketStatus(ticket),
+        status,
         customer: pickString(ticket, ["client_name", "customer_name", "organisation_name"]),
         priority: pickString(ticket, ["priority_name", "priority"]),
         lastActionAt: pickString(ticket, ["last_action_date", "lastupdated", "dateupdated"]),
@@ -1235,6 +1263,63 @@ export class ConnectorService {
     }
 
     return collected.slice(0, maxResults);
+  }
+
+  private async fetchHaloStatuses(baseUrl: string, accessToken: string) {
+    const cacheKey = `${baseUrl}|${accessToken.slice(0, 12)}`;
+    const cached = this.haloStatusCache.get(cacheKey);
+    if (cached && cached.expiresAt > Date.now()) {
+      return cached.records;
+    }
+
+    for (const path of ["/api/status", "/api/ticketstatus", "/api/statuses"]) {
+      const url = new URL(`${baseUrl}${path}`);
+      url.searchParams.set("count", "200");
+
+      const response = await haloFetch(url, {
+        headers: buildHaloHeaders(accessToken)
+      });
+
+      if (!response.ok) {
+        continue;
+      }
+
+      const payload = (await response.json()) as unknown;
+      const records = normalizeCollectionPayload(payload, ["statuses", "ticketstatuses", "results", "data"]);
+      if (records.length > 0) {
+        this.haloStatusCache.set(cacheKey, { expiresAt: Date.now() + 5 * 60 * 1000, records });
+        return records;
+      }
+    }
+
+    return [];
+  }
+
+  private async resolveHaloTicketStatusName(baseUrl: string, accessToken: string, ticket: HaloTicketRecord) {
+    const directStatus = getHaloTicketStatus(ticket);
+    if (directStatus) {
+      return directStatus;
+    }
+
+    const statusId =
+      pickNumber(ticket, ["status_id", "ticketstatus_id", "ticketStatusId"]) ??
+      pickNestedNumber(ticket, ["status", "ticketstatus", "workflow_status", "ticket_status"]);
+    if (!statusId) {
+      return undefined;
+    }
+
+    const statuses = await this.fetchHaloStatuses(baseUrl, accessToken);
+    const match = statuses.find((status) => {
+      const candidateId =
+        pickNumber(status, ["id", "status_id", "ticketstatus_id"]) ??
+        pickNestedNumber(status, ["status", "ticketstatus"]);
+      return candidateId === statusId;
+    });
+
+    return (
+      (match ? getHaloTicketStatus(match) : undefined) ??
+      pickString(match ?? {}, ["name", "label", "displayName", "text"])
+    );
   }
 
   private async resolveHaloEntityHints(tenantId: string, userId: string, query: string): Promise<ResolvedEntityHints> {
