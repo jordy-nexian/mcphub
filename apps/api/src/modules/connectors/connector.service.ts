@@ -62,17 +62,47 @@ function pickNumber(record: Record<string, unknown>, keys: string[]) {
 }
 
 function isTicketOpen(record: HaloTicketRecord) {
-  const closed = record.closed ?? record.isclosed ?? record.isClosed;
-  if (typeof closed === "boolean") {
-    return !closed;
+  const closedCandidates = [
+    record.closed,
+    record.isclosed,
+    record.isClosed,
+    record.inactive,
+    record.isinactive
+  ];
+  for (const candidate of closedCandidates) {
+    if (typeof candidate === "boolean") {
+      if (candidate) {
+        return false;
+      }
+    }
+    if (typeof candidate === "number") {
+      if (candidate === 1) {
+        return false;
+      }
+    }
+    if (typeof candidate === "string") {
+      const normalized = candidate.trim().toLowerCase();
+      if (["true", "1", "yes", "closed", "resolved", "completed", "cancelled", "canceled"].includes(normalized)) {
+        return false;
+      }
+    }
   }
 
-  const statusName = pickString(record, ["status_name", "status", "ticketstatus", "statusName"])?.toLowerCase();
+  const statusName = pickString(record, [
+    "status_name",
+    "status",
+    "ticketstatus",
+    "statusName",
+    "ticket_status",
+    "workflow_status"
+  ])?.toLowerCase();
   if (!statusName) {
     return true;
   }
 
-  return !["closed", "resolved", "completed", "cancelled"].some((keyword) => statusName.includes(keyword));
+  return !["closed", "resolved", "completed", "cancelled", "canceled", "inactive"].some((keyword) =>
+    statusName.includes(keyword)
+  );
 }
 
 function buildHaloHeaders(accessToken: string) {
@@ -866,8 +896,13 @@ export class ConnectorService {
         : undefined;
     }
 
+    const requestedLimit =
+      pickNumber(input, ["limit", "count", "top"]) ??
+      (typeof input.query === "string" && /\b(all)\b/i.test(input.query) ? 100 : 50);
+    const limit = Math.max(1, Math.min(requestedLimit, 100));
+
     const url = new URL(`${baseUrl}/api/tickets`);
-    url.searchParams.set("count", "50");
+    url.searchParams.set("count", String(limit));
     url.searchParams.set("includeclosed", wantsOpenItems(input, rawQuery) ? "false" : "true");
     if (clientId) {
       url.searchParams.set("client_id", String(clientId));
@@ -902,7 +937,7 @@ export class ConnectorService {
         const ticketCustomerName = pickString(ticket, ["client_name", "customer_name", "organisation_name"]);
         return Boolean(resolvedCustomerName && ticketCustomerName === resolvedCustomerName);
       })
-      .slice(0, 25);
+      .slice(0, limit);
 
     return {
       summary:
