@@ -145,6 +145,15 @@ function appendQueryValue(url: URL, key: string, value: unknown) {
   url.searchParams.set(key, normalized);
 }
 
+function buildHaloOpenRuleFields(ticket: HaloTicketRecord, resolvedStatus: string | undefined) {
+  return {
+    statusResolvedFromHalo: resolvedStatus ?? "Unknown",
+    isOpenByRule: (resolvedStatus ?? "").trim().toLowerCase() !== "closed",
+    openRule: "A ticket is considered open unless its resolved status is exactly 'Closed'.",
+    holdFlag: typeof ticket.onhold === "boolean" ? ticket.onhold : pickString(ticket, ["onhold", "on_hold", "holdstatus", "hold_status"])
+  };
+}
+
 function dedupeTicketsById(tickets: HaloTicketRecord[]) {
   const seen = new Set<string>();
   const deduped: HaloTicketRecord[] = [];
@@ -1184,6 +1193,7 @@ export class ConnectorService {
         customer: pickString(ticket, ["client_name", "customer_name", "organisation_name"]),
         priority: pickString(ticket, ["priority_name", "priority"]),
         lastActionAt: pickString(ticket, ["last_action_date", "lastupdated", "dateupdated"]),
+        ...buildHaloOpenRuleFields(ticket, status),
         raw: ticket
       })),
       source: "halopsa"
@@ -2264,15 +2274,18 @@ export class ConnectorService {
       }
     }
 
+    const resolvedStatus = await this.resolveHaloTicketStatusName(baseUrl, accessToken, ticket);
+
     return {
       summary: `Loaded HaloPSA ticket ${id}. Result includes the ticket summary, status, customer, priority, and raw Halo details.`,
       data: [
         {
           id: pickNumber(ticket, ["id", "ticket_id", "TicketID"]),
           summary: pickString(ticket, ["summary", "subject", "title"]),
-          status: getHaloTicketStatus(ticket),
+          status: resolvedStatus,
           customer: pickString(ticket, ["client_name", "customer_name", "organisation_name"]),
           priority: pickString(ticket, ["priority_name", "priority"]),
+          ...buildHaloOpenRuleFields(ticket, resolvedStatus),
           details: ticket
         }
       ],
