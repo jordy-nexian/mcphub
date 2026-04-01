@@ -293,16 +293,16 @@ export class ConnectorService {
     if (provider === "ninjaone") {
       const payload = verifyOAuthState(state, config.oauthStateSigningSecret);
       const ninjaConfig = await this.resolveNinjaOneConfig(payload.tenantId);
-      const tokens = await this.exchangeNinjaOneToken(
-        ninjaConfig,
-        new URLSearchParams({
-          grant_type: "authorization_code",
-          client_id: ninjaConfig.clientId,
-          client_secret: ninjaConfig.clientSecret,
-          code,
-          redirect_uri: ninjaConfig.redirectUri
-        })
-      );
+      const tokenParams = new URLSearchParams({
+        grant_type: "authorization_code",
+        client_id: ninjaConfig.clientId,
+        code,
+        redirect_uri: ninjaConfig.redirectUri
+      });
+      if (ninjaConfig.clientSecret) {
+        tokenParams.set("client_secret", ninjaConfig.clientSecret);
+      }
+      const tokens = await this.exchangeNinjaOneToken(ninjaConfig, tokenParams);
       const now = new Date();
       const account: ConnectedAccountRecord = {
         id: crypto.randomUUID(),
@@ -1524,8 +1524,8 @@ export class ConnectorService {
       ?? `${config.apiUrl}/oauth/ninjaone/callback`;
     const scopes = stored.scopes ?? (process.env.NINJAONE_SCOPES ?? "monitoring devices organizations").split(/\s+/).filter(Boolean);
 
-    if (!apiUrl || !authUrl || !clientId || !clientSecret) {
-      throw new Error("NinjaOne requires API URL, client ID, and client secret in connector settings before connecting");
+    if (!apiUrl || !authUrl || !clientId) {
+      throw new Error("NinjaOne requires API URL and client ID in connector settings before connecting");
     }
 
     return { apiUrl, authUrl, clientId, clientSecret, redirectUri, scopes };
@@ -1565,7 +1565,7 @@ export class ConnectorService {
   }
 
   private async exchangeNinjaOneToken(
-    ninjaConfig: { apiUrl: string; authUrl: string; clientId: string; clientSecret: string; redirectUri: string; scopes: string[] },
+    ninjaConfig: { apiUrl: string; authUrl: string; clientId: string; clientSecret?: string; redirectUri: string; scopes: string[] },
     params: URLSearchParams
   ) {
     const response = await fetch(`${ninjaConfig.authUrl}/ws/oauth/token`, {

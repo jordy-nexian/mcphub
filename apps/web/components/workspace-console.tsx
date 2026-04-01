@@ -417,8 +417,17 @@ export function WorkspaceConsole({
       }
 
       const configEntry = connectorConfigs[connector.id];
-      if (!configEntry?.apiUrl || !configEntry?.clientId || (!configEntry.clientSecret && !configEntry.hasClientSecret)) {
-        setNotice(`Save the ${connector.name} API URL, client ID, and client secret in Connector Setup before starting OAuth.`);
+      const requiresClientSecret = connector.id === "halopsa";
+      if (
+        !configEntry?.apiUrl ||
+        !configEntry?.clientId ||
+        (requiresClientSecret && !configEntry.clientSecret && !configEntry.hasClientSecret)
+      ) {
+        setNotice(
+          requiresClientSecret
+            ? `Save the ${connector.name} API URL, client ID, and client secret in Connector Setup before starting OAuth.`
+            : `Save the ${connector.name} API URL and client ID in Connector Setup before starting OAuth.`
+        );
         return;
       }
 
@@ -799,7 +808,7 @@ export function WorkspaceConsole({
           </div>
           <label className="stack">
             <span className="field-label">
-              {selected.id === "n8n" ? "Bearer token / API key" : "Client secret"}
+              {selected.id === "n8n" ? "Bearer token / API key" : selected.id === "ninjaone" ? "Client secret (optional)" : "Client secret"}
             </span>
             <input
               type="password"
@@ -810,12 +819,20 @@ export function WorkspaceConsole({
                   ? "Saved already. Enter a new secret to replace it."
                   : selected.id === "n8n"
                     ? "Enter the n8n bearer token or API key"
+                    : selected.id === "ninjaone"
+                      ? "Leave blank when using client authorization without a secret"
                     : "Enter the client secret"
               }
             />
           </label>
           <div className="connector-meta">
-            {selectedConfig.hasClientSecret ? "A secret is already saved for this connector." : "No secret saved yet."}
+            {selected.id === "ninjaone"
+              ? selectedConfig.hasClientSecret
+                ? "A client secret is saved for this connector, but NinjaOne can also run without one."
+                : "No secret saved. This is fine if your NinjaOne app uses client authorization without a secret."
+              : selectedConfig.hasClientSecret
+                ? "A secret is already saved for this connector."
+                : "No secret saved yet."}
           </div>
           <div className="row">
             <button className="button secondary" onClick={() => void saveConnectorConfig(selected.id)} type="button" disabled={savingConfigId === selected.id}>
