@@ -212,12 +212,16 @@ export class ConnectorService {
 
     if (provider === "ninjaone") {
       const ninjaConfig = await this.resolveNinjaOneConfig(tenantId);
-      const state = createOAuthState({ provider, tenantId, userId, returnTo }, config.oauthStateSigningSecret);
+      const codeVerifier = crypto.randomBytes(32).toString("base64url");
+      const codeChallenge = crypto.createHash("sha256").update(codeVerifier).digest("base64url");
+      const state = createOAuthState({ provider, tenantId, userId, returnTo, codeVerifier }, config.oauthStateSigningSecret);
       const params = new URLSearchParams({
         client_id: ninjaConfig.clientId,
         redirect_uri: ninjaConfig.redirectUri,
         response_type: "code",
         scope: ninjaConfig.scopes.join(" "),
+        code_challenge: codeChallenge,
+        code_challenge_method: "S256",
         state
       });
 
@@ -299,6 +303,9 @@ export class ConnectorService {
         code,
         redirect_uri: ninjaConfig.redirectUri
       });
+      if (payload.codeVerifier) {
+        tokenParams.set("code_verifier", payload.codeVerifier);
+      }
       if (ninjaConfig.clientSecret) {
         tokenParams.set("client_secret", ninjaConfig.clientSecret);
       }

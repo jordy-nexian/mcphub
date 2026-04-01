@@ -5,6 +5,7 @@ export interface OAuthStatePayload {
   userId: string;
   provider: string;
   returnTo?: string;
+  codeVerifier?: string;
 }
 
 export function createOAuthState(payload: OAuthStatePayload, signingSecret: string): string {
@@ -22,4 +23,3 @@ export function verifyOAuthState(state: string, signingSecret: string): OAuthSta
 
   return JSON.parse(Buffer.from(body, "base64url").toString("utf8")) as OAuthStatePayload;
 }
-
