@@ -680,7 +680,7 @@ export function WorkspaceConsole({
     return (
       <div className="stack">
         {notice ? <div className="notice">{notice}</div> : null}
-        <article className="panel stack">
+        <article className="panel stack connector-catalog-panel">
           <div className="section-heading">
             <div>
               <span className="eyebrow">Connector Setup</span>

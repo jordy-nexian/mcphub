@@ -306,6 +306,8 @@ thead th { color: #b9d7e6; font-size: 0.78rem; font-weight: 700; letter-spacing:
 .danger-text { color: #ffb3b3; }
 
 .dashboard-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 18px; }
+.connector-catalog-panel { grid-column: 1 / -1; }
+.connector-catalog-panel .connector-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .permission-list, .timeline, .tenant-health-list { display: flex; flex-direction: column; gap: 14px; }
 .permission-item {
   padding: 18px 20px;
@@ -388,7 +390,8 @@ thead th { color: #b9d7e6; font-size: 0.78rem; font-weight: 700; letter-spacing:
 }
 
 @media (max-width: 1100px) {
-  .landing-hero, .hero-console, .hero, .app-shell, .dashboard-grid, .grid.two, .grid.three, .connector-grid, .stats-row { grid-template-columns: 1fr; }
+  .landing-hero, .hero-console, .hero, .app-shell, .dashboard-grid, .grid.two, .grid.three, .connector-grid, .stats-row,
+  .connector-catalog-panel .connector-grid { grid-template-columns: 1fr; }
   .sidebar { position: static; height: auto; border-right: 0; border-bottom: 1px solid var(--line); }
 }
 
