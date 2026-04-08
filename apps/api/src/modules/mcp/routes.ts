@@ -120,23 +120,6 @@ function parseBasicClientCredentials(authorizationHeader: string | undefined) {
   };
 }
 
-function matchesRedirectUri(allowedRedirectUri: string, redirectUri: string) {
-  if (allowedRedirectUri === redirectUri) {
-    return true;
-  }
-
-  if (allowedRedirectUri.includes("*")) {
-    const [prefix, suffix] = allowedRedirectUri.split("*");
-    return redirectUri.startsWith(prefix) && redirectUri.endsWith(suffix ?? "");
-  }
-
-  return false;
-}
-
-function isAllowedRedirectUri(allowedRedirectUris: string[], redirectUri: string) {
-  return allowedRedirectUris.some((allowed) => matchesRedirectUri(allowed, redirectUri));
-}
-
 function applyCors(reply: FastifyReply, origin: string) {
   reply.header("access-control-allow-origin", origin);
   reply.header("access-control-allow-headers", "content-type, authorization");
@@ -430,7 +413,7 @@ export function registerApiRoutes(
     const allowedRedirectUris =
       query.client_id === deps.config.mcpOauthClientId ? deps.config.mcpOauthRedirectUris : registeredClient?.redirectUris ?? [];
 
-    if (!isAllowedRedirectUri(allowedRedirectUris, query.redirect_uri)) {
+    if (!allowedRedirectUris.includes(query.redirect_uri)) {
       return reply.status(400).send("Redirect URI is not allowed");
     }
 

@@ -7,11 +7,7 @@ const envSchema = z.object({
   INTERNAL_MCP_SHARED_SECRET: z.string().min(8).optional(),
   MCP_OAUTH_CLIENT_ID: z.string().default("claude"),
   MCP_OAUTH_CLIENT_SECRET: z.string().min(8).default("replace-me-mcp-client-secret"),
-  MCP_OAUTH_REDIRECT_URIS: z
-    .string()
-    .default(
-      "https://claude.ai/api/mcp/auth_callback,https://chat.openai.com/aip/*/oauth/callback,https://chatgpt.com/aip/*/oauth/callback"
-    ),
+  MCP_OAUTH_REDIRECT_URIS: z.string().default("https://claude.ai/api/mcp/auth_callback"),
   MCP_OAUTH_SCOPES: z.string().default("mcp"),
   TOKEN_ENCRYPTION_KEY_BASE64: z.string().min(16).default(Buffer.alloc(32).toString("base64")),
   SESSION_SECRET: z.string().min(8).default("local-session-secret"),
