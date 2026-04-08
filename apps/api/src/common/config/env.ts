@@ -15,6 +15,11 @@ const envSchema = z.object({
   REDIS_URL: z.string().optional()
 });
 
+const DEFAULT_MCP_OAUTH_REDIRECT_URIS = [
+  "https://claude.ai/api/mcp/auth_callback",
+  "https://claude.com/api/mcp/auth_callback"
+];
+
 export function buildAppConfig() {
   const env = envSchema.parse({
     APP_URL: process.env.APP_URL,
@@ -38,7 +43,12 @@ export function buildAppConfig() {
     internalMcpSharedSecret: env.INTERNAL_MCP_SHARED_SECRET ?? env.SESSION_SECRET,
     mcpOauthClientId: env.MCP_OAUTH_CLIENT_ID,
     mcpOauthClientSecret: env.MCP_OAUTH_CLIENT_SECRET,
-    mcpOauthRedirectUris: env.MCP_OAUTH_REDIRECT_URIS.split(",").map((item) => item.trim()).filter(Boolean),
+    mcpOauthRedirectUris: Array.from(
+      new Set([
+        ...env.MCP_OAUTH_REDIRECT_URIS.split(",").map((item) => item.trim()).filter(Boolean),
+        ...DEFAULT_MCP_OAUTH_REDIRECT_URIS
+      ])
+    ),
     mcpOauthScopes: env.MCP_OAUTH_SCOPES.split(/\s+/).filter(Boolean),
     redisUrl: env.REDIS_URL,
     oauthStateSigningSecret: env.OAUTH_STATE_SIGNING_SECRET,
