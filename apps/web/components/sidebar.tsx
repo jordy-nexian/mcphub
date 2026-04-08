@@ -125,16 +125,7 @@ export function Sidebar({ variant }: { variant: "admin" | "tenant" }) {
         <button
           className="button secondary sidebar-signout"
           type="button"
-          onClick={async () => {
-            try {
-              const apiOrigin = process.env.NEXT_PUBLIC_API_URL ?? window.location.origin.replace(":3000", ":4000");
-              await fetch(`${apiOrigin}/auth/logout`, {
-                method: "POST",
-                credentials: "include"
-              });
-            } catch {
-              // Best effort cookie clear; local session is still removed below.
-            }
+          onClick={() => {
             clearPlatformSession();
             window.location.href = "/auth/login";
           }}

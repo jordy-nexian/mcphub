@@ -511,16 +511,7 @@ export function WorkspaceConsole({
     setNotice(`${connector.name} disconnected.`);
   }
 
-  async function signOut() {
-    try {
-      await fetch(`${apiOrigin}/auth/logout`, {
-        method: "POST",
-        credentials: "include"
-      });
-    } catch {
-      // Best effort cookie clear; local session is still removed below.
-    }
-
+  function signOut() {
     clearPlatformSession();
     router.replace("/auth/login");
   }
