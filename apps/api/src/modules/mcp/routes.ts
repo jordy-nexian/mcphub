@@ -193,7 +193,12 @@ function parsePlatformAuthFromRequest(
   return authService.verifyPlatformToken(cookies.nexian_session);
 }
 
-function renderAuthorizeLoginPage(apiUrl: string, query: Record<string, string | undefined>, notice?: string) {
+function renderAuthorizeLoginPage(
+  apiUrl: string,
+  query: Record<string, string | undefined>,
+  clientName: string,
+  notice?: string
+) {
   const encodedQuery = encodeURIComponent(JSON.stringify(query));
   return `
     <!DOCTYPE html>
@@ -215,7 +220,7 @@ function renderAuthorizeLoginPage(apiUrl: string, query: Record<string, string |
         <div class="card">
           <p class="muted">Nexian MCP Login</p>
           <h1>Sign in to continue</h1>
-          <p class="muted">Claude is requesting access to your Nexian MCP workspace.</p>
+          <p class="muted">${clientName} is requesting access to your Nexian MCP workspace.</p>
           ${notice ? `<div class="notice">${notice}</div>` : ""}
           <label>Email</label>
           <input id="email" type="email" placeholder="admin@example.com" />
@@ -252,7 +257,12 @@ function renderAuthorizeLoginPage(apiUrl: string, query: Record<string, string |
   `;
 }
 
-function renderConsentPage(apiUrl: string, query: Record<string, string | undefined>, displayName: string) {
+function renderConsentPage(
+  apiUrl: string,
+  query: Record<string, string | undefined>,
+  displayName: string,
+  clientName: string
+) {
   const params = new URLSearchParams(query as Record<string, string>);
   const approveUrl = `${apiUrl}/oauth/authorize/approve?${params.toString()}`;
   const denyUrl = `${apiUrl}/oauth/authorize/deny?${params.toString()}`;
@@ -278,8 +288,8 @@ function renderConsentPage(apiUrl: string, query: Record<string, string | undefi
       <body>
         <div class="card">
           <p class="muted">Signed in as ${displayName}</p>
-          <h1>Authorize Claude</h1>
-          <p class="muted">Claude wants to access your Nexian MCP workspace and act using your connected tools.</p>
+          <h1>Authorize ${clientName}</h1>
+          <p class="muted">${clientName} wants to access your Nexian MCP workspace and act using your connected tools.</p>
           <p><strong>Requested scopes:</strong> <code>${query.scope ?? "mcp"}</code></p>
           <div class="row">
             <a class="primary" href="${approveUrl}">Approve</a>
@@ -333,6 +343,11 @@ export function registerApiRoutes(
     const session = await deps.authService.login(body.email, body.password);
     reply.header("set-cookie", deps.authService.issueSessionCookie(session.token));
     return session;
+  });
+
+  app.post("/auth/logout", async (_request, reply) => {
+    reply.header("set-cookie", deps.authService.clearSessionCookie());
+    return { ok: true };
   });
 
   app.get("/auth/me", async (request, reply) => {
@@ -422,6 +437,7 @@ export function registerApiRoutes(
     const query = oauthAuthorizeQuerySchema.parse(request.query);
     const registeredClient =
       query.client_id === deps.config.mcpOauthClientId ? undefined : await deps.authService.getOAuthClient(query.client_id);
+    const clientName = registeredClient?.clientName ?? query.client_id;
 
     if (query.client_id !== deps.config.mcpOauthClientId && !registeredClient) {
       return reply.status(400).send("Unknown OAuth client");
@@ -445,7 +461,7 @@ export function registerApiRoutes(
           scope: query.scope,
           code_challenge: query.code_challenge,
           code_challenge_method: query.code_challenge_method
-        })
+        }, clientName)
       );
       return;
     }
@@ -462,7 +478,8 @@ export function registerApiRoutes(
           code_challenge: query.code_challenge,
           code_challenge_method: query.code_challenge_method
         },
-        auth.displayName
+        auth.displayName,
+        clientName
       )
     );
   });
