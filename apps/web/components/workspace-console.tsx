@@ -347,7 +347,9 @@ export function WorkspaceConsole({
       return;
     }
 
+    setConnectorConfigs({});
     const sessionToken = session.token;
+    const tenantName = session.tenant.name;
 
     async function loadConnectorConfigs() {
       try {
@@ -386,10 +388,13 @@ export function WorkspaceConsole({
           ...current,
           connectors: current.connectors.map((connector) =>
             nextConfigs[connector.id]?.apiUrl && connector.status !== "Connected"
-              ? { ...connector, lastSync: "Configuration saved" }
+              ? { ...connector, lastSync: "Tenant configuration loaded" }
               : connector
           )
         }));
+        if (Object.values(nextConfigs).some((config) => config.apiUrl || config.clientId || config.hasClientSecret)) {
+          setNotice(`Loaded shared connector settings for ${tenantName}. OAuth consent remains per user.`);
+        }
       } catch (error) {
         setNotice(error instanceof Error ? error.message : "Unable to load connector configuration.");
       }
@@ -729,6 +734,9 @@ export function WorkspaceConsole({
                   ? "n8n is set up for workflow catalog, execution lookups, and webhook-triggered automation runs across linked boxes."
                   : "Configuration is stored per tenant so each customer can have its own connector settings."}
             </p>
+            <p className="connector-meta">
+              Shared app settings are loaded tenant-wide. Each user still completes their own OAuth consent and gets their own connected account token.
+            </p>
           </div>
           <div className="field-grid">
             <label className="stack">
@@ -842,6 +850,11 @@ export function WorkspaceConsole({
                 ? "A secret is already saved for this connector."
                 : "No secret saved yet."}
           </div>
+          {(selectedConfig.apiUrl || selectedConfig.clientId || selectedConfig.hasClientSecret) ? (
+            <div className="notice">
+              Shared tenant settings are already loaded for {state.workspaceName}. You only need to save here if you want to replace the tenant-wide connector app settings.
+            </div>
+          ) : null}
           <div className="row">
             <button className="button secondary" onClick={() => void saveConnectorConfig(selected.id)} type="button" disabled={savingConfigId === selected.id}>
               {savingConfigId === selected.id ? "Saving..." : "Save settings"}
