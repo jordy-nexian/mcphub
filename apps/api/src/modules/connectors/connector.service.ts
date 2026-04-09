@@ -2176,7 +2176,8 @@ export class ConnectorService {
       return userMatch || organizationMatch;
     });
 
-    let rankedDevices = filteredDevices.length > 0 ? filteredDevices : allDevices;
+    const hasTargetedHints = effectiveUserHints.length > 0 || effectiveOrganizationHints.length > 0;
+    let rankedDevices = filteredDevices.length > 0 ? filteredDevices : hasTargetedHints ? [] : allDevices;
 
     if (effectiveUserHints.length > 0) {
       const topCandidates = rankedDevices
@@ -2211,8 +2212,10 @@ export class ConnectorService {
 
       if (detailMatches.length > 0) {
         rankedDevices = detailMatches;
-      } else {
+      } else if (!hasTargetedHints) {
         rankedDevices = detailedCandidates;
+      } else {
+        rankedDevices = [];
       }
     }
 
@@ -2234,7 +2237,9 @@ export class ConnectorService {
             }${
               usedHaloAssetBridge ? " using Halo asset records as the device bridge." : "."
             } Username variants such as domain-prefixed logins are considered during matching. Results are condensed to device identity, organization, site, health, operating system, and serial information.`
-          : "No NinjaOne devices matched that search.",
+          : hasTargetedHints
+            ? "No NinjaOne devices could be confidently linked to that person or organization. Generic top devices are intentionally excluded until a real user, org, or asset match is found."
+            : "No NinjaOne devices matched that search.",
       data: devices.map((device) => this.mapNinjaOneDevice(device)),
       source: "ninjaone"
     };
