@@ -28,9 +28,9 @@ export const ninjaOneAdapter: ProviderAdapter = {
         "get_rmm_device_activities",
         "List recent NinjaOne device activities such as checks, automation runs, patches, and operational changes."
       ),
-      createStubTool("list_devices_for_site", "List managed endpoints and device health for a NinjaOne organization or site."),
-      createStubTool("search_documents", "Search runbooks, scripts, and supporting notes exposed through NinjaOne."),
-      createStubTool("find_contact", "Find technician or customer contact information linked to NinjaOne records.")
+      createStubTool("list_rmm_devices_for_site", "List managed endpoints and device health for a NinjaOne organization or site."),
+      createStubTool("search_rmm_documents", "Search runbooks, scripts, and supporting notes exposed through NinjaOne."),
+      createStubTool("find_rmm_contact", "Find technician or customer contact information linked to NinjaOne records.")
     ];
   }
 };

@@ -1064,7 +1064,7 @@ export class ConnectorService {
 
     switch (toolName) {
       case "search_rmm_devices":
-      case "list_devices_for_site":
+      case "list_rmm_devices_for_site":
         return this.searchNinjaOneDevices(tenantId, userId, baseUrl, accessToken, input);
       case "get_user_devices":
         return this.searchNinjaOneDevices(tenantId, userId, baseUrl, accessToken, input, { requireUserMatch: true });
