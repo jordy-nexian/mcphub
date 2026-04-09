@@ -9,6 +9,10 @@ export const ninjaOneAdapter: ProviderAdapter = {
   getTools() {
     return [
       createStubTool(
+        "get_user_devices",
+        "Use when the user asks for devices used by, assigned to, or belonging to a named person or contact. This should resolve the person through Halo and NinjaOne context and return the most likely endpoints in one step."
+      ),
+      createStubTool(
         "search_rmm_devices",
         "Search NinjaOne managed devices by name, hostname, serial, or organization and return endpoint identity plus health context."
       ),

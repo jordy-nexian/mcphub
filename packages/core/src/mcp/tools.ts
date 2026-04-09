@@ -11,6 +11,7 @@ export const toolNames = [
   "find_contact",
   "search_documents",
   "list_devices_for_site",
+  "get_user_devices",
   "search_rmm_devices",
   "get_rmm_device_overview",
   "get_rmm_device_alerts",
