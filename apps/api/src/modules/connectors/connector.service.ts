@@ -1065,8 +1065,9 @@ export class ConnectorService {
     switch (toolName) {
       case "search_rmm_devices":
       case "list_devices_for_site":
-      case "get_user_devices":
         return this.searchNinjaOneDevices(tenantId, userId, baseUrl, accessToken, input);
+      case "get_user_devices":
+        return this.searchNinjaOneDevices(tenantId, userId, baseUrl, accessToken, input, { requireUserMatch: true });
       case "get_rmm_device_overview":
         return this.getNinjaOneDeviceOverview(baseUrl, accessToken, input);
       case "get_rmm_device_alerts":
@@ -2099,7 +2100,8 @@ export class ConnectorService {
     userId: string,
     baseUrl: string,
     accessToken: string,
-    input: Record<string, unknown>
+    input: Record<string, unknown>,
+    options: { requireUserMatch?: boolean } = {}
   ) {
     const rawQuery = typeof input.query === "string" ? input.query.trim() : "";
     const userHint = extractUserHint(rawQuery);
@@ -2169,6 +2171,10 @@ export class ConnectorService {
         effectiveOrganizationHints.length === 0 ||
         effectiveOrganizationHints.some((hint) => textMatches(organizationCandidate, hint));
 
+      if (options.requireUserMatch && effectiveUserHints.length > 0) {
+        return userMatch;
+      }
+
       if (effectiveUserHints.length > 0 && effectiveOrganizationHints.length > 0) {
         return userMatch && organizationMatch;
       }
@@ -2225,7 +2231,7 @@ export class ConnectorService {
           scoreNinjaOneDevice(right, query, effectiveUserHints, effectiveOrganizationHints) -
           scoreNinjaOneDevice(left, query, effectiveUserHints, effectiveOrganizationHints)
       )
-      .slice(0, 50);
+      .slice(0, options.requireUserMatch ? 15 : 50);
 
     return {
       summary:
@@ -2238,7 +2244,9 @@ export class ConnectorService {
               usedHaloAssetBridge ? " using Halo asset records as the device bridge." : "."
             } Username variants such as domain-prefixed logins are considered during matching. Results are condensed to device identity, organization, site, health, operating system, and serial information.`
           : hasTargetedHints
-            ? "No NinjaOne devices could be confidently linked to that person or organization. Generic top devices are intentionally excluded until a real user, org, or asset match is found."
+            ? options.requireUserMatch && effectiveUserHints.length > 0
+              ? "No NinjaOne devices could be confidently linked to that specific user. Organization-only matches are intentionally excluded for this user-focused lookup."
+              : "No NinjaOne devices could be confidently linked to that person or organization. Generic top devices are intentionally excluded until a real user, org, or asset match is found."
             : "No NinjaOne devices matched that search.",
       data: devices.map((device) => this.mapNinjaOneDevice(device)),
       source: "ninjaone"
