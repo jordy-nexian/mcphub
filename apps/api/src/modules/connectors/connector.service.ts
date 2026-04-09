@@ -425,7 +425,17 @@ function deviceMatchesUserHint(device: Record<string, unknown>, userHint: string
 
   const variants = buildIdentityVariants(userHint);
   const candidates = [
-    pickString(device, ["lastLoggedInUser", "currentUser", "loggedInUser", "assignedUser", "userName", "username"]),
+    pickString(device, [
+      "lastLoggedInUser",
+      "lastLogin",
+      "last_login",
+      "lastUser",
+      "currentUser",
+      "loggedInUser",
+      "assignedUser",
+      "userName",
+      "username"
+    ]),
     pickString(device, ["primaryUser", "owner", "contactName", "user", "displayName", "loggedInUsername"]),
     pickString(device, ["email", "emailAddress", "userEmail"]),
     pickString(device, ["organizationName", "organisationName", "customerName"])
@@ -459,15 +469,23 @@ function scoreNinjaOneDevice(
   device: Record<string, unknown>,
   query: string,
   userHints: string[],
-  organizationHints: string[]
+  organizationHints: string[],
+  deviceHints: string[] = []
 ) {
   let score = 0;
 
   const nameCandidate = pickString(device, ["systemName", "displayName", "hostname", "name"]);
   const organizationCandidate = pickString(device, ["organizationName", "organisationName", "customerName", "siteName"]);
+  const serialCandidate = pickString(device, ["serialNumber", "serial"]);
 
   if (query && textMatches(nameCandidate, query)) {
     score += 4;
+  }
+
+  for (const hint of deviceHints) {
+    if (textMatches(nameCandidate, hint) || textMatches(serialCandidate, hint)) {
+      score += 10;
+    }
   }
 
   if (organizationHints.length > 0) {
@@ -2018,6 +2036,37 @@ export class ConnectorService {
     throw lastError ?? new Error("NinjaOne request failed");
   }
 
+  private async searchNinjaOneIndex(
+    baseUrl: string,
+    accessToken: string,
+    options: {
+      q?: string;
+      limit?: number;
+      organizationId?: number;
+    }
+  ) {
+    const searchTerm = options.q?.trim();
+    const limit = options.limit ?? 100;
+
+    if (searchTerm) {
+      try {
+        return await this.fetchNinjaOneJsonWithFallback(baseUrl, accessToken, ["/devices/search"], {
+          q: searchTerm,
+          limit
+        });
+      } catch {
+        // Fall through to older/list-style endpoints.
+      }
+    }
+
+    return this.fetchNinjaOneJsonWithFallback(baseUrl, accessToken, ["/devices"], {
+      search: searchTerm || undefined,
+      q: searchTerm || undefined,
+      organizationId: options.organizationId,
+      limit
+    });
+  }
+
   private pickDeviceId(input: Record<string, unknown>) {
     const rawId =
       input.id ??
@@ -2069,8 +2118,9 @@ export class ConnectorService {
       throw new Error("A NinjaOne device id or search query is required");
     }
 
-    const payload = await this.fetchNinjaOneJson(baseUrl, accessToken, "/devices", {
-      search: query
+    const payload = await this.searchNinjaOneIndex(baseUrl, accessToken, {
+      q: query,
+      limit: 50
     });
     const devices = this.normalizeNinjaOneCollection(payload);
     const matched = devices.find((device) =>
@@ -2143,13 +2193,15 @@ export class ConnectorService {
     );
 
     const candidatePayloads = await Promise.all([
-      this.fetchNinjaOneJson(baseUrl, accessToken, "/devices", {
-        organizationId
+      this.searchNinjaOneIndex(baseUrl, accessToken, {
+        organizationId,
+        limit: 100
       }),
       ...candidateSearches.map((searchTerm) =>
-        this.fetchNinjaOneJson(baseUrl, accessToken, "/devices", {
-          search: searchTerm,
-          organizationId
+        this.searchNinjaOneIndex(baseUrl, accessToken, {
+          q: searchTerm,
+          organizationId,
+          limit: 100
         })
       )
     ]);
@@ -2189,8 +2241,8 @@ export class ConnectorService {
       const topCandidates = rankedDevices
         .sort(
           (left, right) =>
-            scoreNinjaOneDevice(right, query, effectiveUserHints, effectiveOrganizationHints) -
-            scoreNinjaOneDevice(left, query, effectiveUserHints, effectiveOrganizationHints)
+            scoreNinjaOneDevice(right, query, effectiveUserHints, effectiveOrganizationHints, effectiveDeviceHints) -
+            scoreNinjaOneDevice(left, query, effectiveUserHints, effectiveOrganizationHints, effectiveDeviceHints)
         )
         .slice(0, 15);
 
@@ -2228,8 +2280,8 @@ export class ConnectorService {
     const devices = rankedDevices
       .sort(
         (left, right) =>
-          scoreNinjaOneDevice(right, query, effectiveUserHints, effectiveOrganizationHints) -
-          scoreNinjaOneDevice(left, query, effectiveUserHints, effectiveOrganizationHints)
+          scoreNinjaOneDevice(right, query, effectiveUserHints, effectiveOrganizationHints, effectiveDeviceHints) -
+          scoreNinjaOneDevice(left, query, effectiveUserHints, effectiveOrganizationHints, effectiveDeviceHints)
       )
       .slice(0, options.requireUserMatch ? 15 : 50);
 
