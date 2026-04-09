@@ -404,6 +404,15 @@ function buildIdentityVariants(value: string) {
     variants.add(`${pieces[0]}-${pieces[pieces.length - 1]}`);
     variants.add(`${pieces[pieces.length - 1]}${pieces[0]}`);
     variants.add(`${pieces[0][0]}${pieces[pieces.length - 1]}`);
+    variants.add(`${pieces[0][0]}.${pieces[pieces.length - 1]}`);
+    variants.add(`${pieces[0][0]}_${pieces[pieces.length - 1]}`);
+    variants.add(`${pieces[0][0]}-${pieces[pieces.length - 1]}`);
+  }
+
+  const baseVariants = [...variants];
+  for (const variant of baseVariants) {
+    variants.add(`AzureAD\\${variant}`);
+    variants.add(`AzureAD/${variant}`);
   }
 
   return [...variants];
@@ -2111,6 +2120,14 @@ export class ConnectorService {
       .filter(Boolean);
     const effectiveOrganizationHints = (haloHints?.organizationHints ?? []).map((value) => value.trim()).filter(Boolean);
     const effectiveDeviceHints = (haloHints?.deviceHints ?? []).map((value) => value.trim()).filter(Boolean);
+    const userSearchVariants = Array.from(
+      new Set(
+        effectiveUserHints
+          .flatMap((hint) => buildIdentityVariants(hint))
+          .map((value) => value.trim())
+          .filter(Boolean)
+      )
+    );
     const shouldUseRawSearch = query ? looksLikeDeviceIdentityQuery(query) : false;
     const usedHaloAssetBridge = effectiveDeviceHints.length > 0;
     const candidateSearches = Array.from(
@@ -2118,7 +2135,8 @@ export class ConnectorService {
         ...(usedHaloAssetBridge ? effectiveDeviceHints.slice(0, 10) : []),
         shouldUseRawSearch ? query : "",
         !shouldUseRawSearch && effectiveOrganizationHints.length > 0 ? effectiveOrganizationHints[0] ?? "" : "",
-        ...(usedHaloAssetBridge ? [] : effectiveDeviceHints.slice(0, 6))
+        ...(usedHaloAssetBridge ? [] : effectiveDeviceHints.slice(0, 6)),
+        ...userSearchVariants.slice(0, 10)
       ].filter(Boolean))
     );
 
@@ -2215,7 +2233,7 @@ export class ConnectorService {
                 : ""
             }${
               usedHaloAssetBridge ? " using Halo asset records as the device bridge." : "."
-            } Results are condensed to device identity, organization, site, health, operating system, and serial information.`
+            } Username variants such as domain-prefixed logins are considered during matching. Results are condensed to device identity, organization, site, health, operating system, and serial information.`
           : "No NinjaOne devices matched that search.",
       data: devices.map((device) => this.mapNinjaOneDevice(device)),
       source: "ninjaone"
