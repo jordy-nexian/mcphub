@@ -770,7 +770,7 @@ export class ConnectorService {
             authUrl: configJson.authUrl ?? "",
             clientId: configJson.clientId ?? "",
             redirectUri: configJson.redirectUri ?? "",
-            scopes: (configJson.scopes ?? ["monitoring", "devices", "organizations"]).join(" "),
+            scopes: (configJson.scopes ?? ["monitoring", "management", "control"]).join(" "),
             hasClientSecret: Boolean(configJson.clientSecretEncrypted)
           }
         };
@@ -911,6 +911,20 @@ export class ConnectorService {
   async ensureFreshAccount(account: ConnectedAccountRecord) {
     if (account.provider === "halopsa") {
       const refreshed = await this.refreshHaloAccountIfNeeded(account);
+      if (
+        refreshed.accessTokenEncrypted !== account.accessTokenEncrypted ||
+        refreshed.refreshTokenEncrypted !== account.refreshTokenEncrypted ||
+        refreshed.expiresAt?.toISOString() !== account.expiresAt?.toISOString() ||
+        refreshed.status !== account.status
+      ) {
+        refreshed.updatedAt = new Date();
+        await this.store.upsert(refreshed);
+      }
+      return refreshed;
+    }
+
+    if (account.provider === "ninjaone") {
+      const refreshed = await this.refreshNinjaOneAccountIfNeeded(account);
       if (
         refreshed.accessTokenEncrypted !== account.accessTokenEncrypted ||
         refreshed.refreshTokenEncrypted !== account.refreshTokenEncrypted ||
@@ -2461,7 +2475,7 @@ export class ConnectorService {
             this.normalizeNinjaOneRedirectUri(this.readOptionalString(input, "redirectUri") ?? existing.redirectUri)
             ?? this.normalizeNinjaOneRedirectUri(process.env.NINJAONE_REDIRECT_URI)
             ?? `${config.apiUrl}/oauth/ninjaone/callback`,
-          scopes: this.parseScopes(input.scopes, existing.scopes ?? ["monitoring", "devices", "organizations"])
+          scopes: this.parseScopes(input.scopes, existing.scopes ?? ["monitoring", "management", "control"])
         } satisfies StoredConnectorConfig;
       case "cipp":
         return {
@@ -2645,6 +2659,46 @@ export class ConnectorService {
           refresh_token: refreshToken
         })
       );
+
+      return {
+        ...account,
+        accessTokenEncrypted: this.encryption.encrypt(tokens.accessToken),
+        refreshTokenEncrypted: tokens.refreshToken ? this.encryption.encrypt(tokens.refreshToken) : account.refreshTokenEncrypted,
+        expiresAt: tokens.expiresAt ?? account.expiresAt,
+        status: "ACTIVE",
+        lastError: undefined
+      };
+    } catch (error) {
+      return {
+        ...account,
+        status: "ERROR",
+        lastError: error instanceof Error ? error.message : "Unknown refresh error"
+      };
+    }
+  }
+
+  private async refreshNinjaOneAccountIfNeeded(account: ConnectedAccountRecord): Promise<ConnectedAccountRecord> {
+    if (!account.expiresAt || account.expiresAt.getTime() > Date.now() + 60_000) {
+      return account;
+    }
+
+    if (!account.refreshTokenEncrypted) {
+      throw new Error(`No refresh path configured for ${account.provider}`);
+    }
+
+    try {
+      const ninjaConfig = await this.resolveNinjaOneConfig(account.tenantId);
+      const refreshToken = this.encryption.decrypt(account.refreshTokenEncrypted);
+      const params = new URLSearchParams({
+        grant_type: "refresh_token",
+        client_id: ninjaConfig.clientId,
+        refresh_token: refreshToken
+      });
+      if (ninjaConfig.clientSecret) {
+        params.set("client_secret", ninjaConfig.clientSecret);
+      }
+
+      const tokens = await this.exchangeNinjaOneToken(ninjaConfig, params);
 
       return {
         ...account,
