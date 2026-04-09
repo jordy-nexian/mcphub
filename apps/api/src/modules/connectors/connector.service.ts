@@ -3048,7 +3048,7 @@ export class ConnectorService {
     }
 
     if (!account.refreshTokenEncrypted) {
-      throw new Error(`No refresh path configured for ${account.provider}`);
+      return account;
     }
 
     try {
