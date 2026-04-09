@@ -433,6 +433,53 @@ function deviceMatchesUserHint(device: Record<string, unknown>, userHint: string
   });
 }
 
+function looksLikeDeviceIdentityQuery(query: string) {
+  const normalized = normalizeWhitespace(query);
+  if (!normalized) {
+    return false;
+  }
+
+  if (/^[A-Z]{2,}\d{3,}$/i.test(normalized.replace(/\s+/g, ""))) {
+    return true;
+  }
+
+  return /[\\/_-]/.test(normalized) || /\d/.test(normalized);
+}
+
+function scoreNinjaOneDevice(
+  device: Record<string, unknown>,
+  query: string,
+  userHints: string[],
+  organizationHints: string[]
+) {
+  let score = 0;
+
+  const nameCandidate = pickString(device, ["systemName", "displayName", "hostname", "name"]);
+  const organizationCandidate = pickString(device, ["organizationName", "organisationName", "customerName", "siteName"]);
+
+  if (query && textMatches(nameCandidate, query)) {
+    score += 4;
+  }
+
+  if (organizationHints.length > 0) {
+    for (const hint of organizationHints) {
+      if (textMatches(organizationCandidate, hint)) {
+        score += 5;
+      }
+    }
+  }
+
+  if (userHints.length > 0) {
+    for (const hint of userHints) {
+      if (deviceMatchesUserHint(device, hint)) {
+        score += 7;
+      }
+    }
+  }
+
+  return score;
+}
+
 function extractUserHint(query: string | undefined) {
   if (!query) {
     return "";
@@ -1869,6 +1916,25 @@ export class ConnectorService {
     return response.json() as Promise<unknown>;
   }
 
+  private async fetchNinjaOneJsonWithFallback(
+    baseUrl: string,
+    accessToken: string,
+    paths: string[],
+    query?: Record<string, string | number | undefined>
+  ) {
+    let lastError: Error | undefined;
+
+    for (const path of paths) {
+      try {
+        return await this.fetchNinjaOneJson(baseUrl, accessToken, path, query);
+      } catch (error) {
+        lastError = error instanceof Error ? error : new Error(String(error));
+      }
+    }
+
+    throw lastError ?? new Error("NinjaOne request failed");
+  }
+
   private pickDeviceId(input: Record<string, unknown>) {
     const rawId =
       input.id ??
@@ -1908,7 +1974,10 @@ export class ConnectorService {
   private async resolveNinjaOneDevice(baseUrl: string, accessToken: string, input: Record<string, unknown>) {
     const deviceId = this.pickDeviceId(input);
     if (deviceId) {
-      const payload = await this.fetchNinjaOneJson(baseUrl, accessToken, `/device/${deviceId}`);
+      const payload = await this.fetchNinjaOneJsonWithFallback(baseUrl, accessToken, [
+        `/devices/${deviceId}`,
+        `/device/${deviceId}`
+      ]);
       return payload as Record<string, unknown>;
     }
 
@@ -1936,7 +2005,10 @@ export class ConnectorService {
       return matched;
     }
 
-    const detail = await this.fetchNinjaOneJson(baseUrl, accessToken, `/device/${matchedId}`);
+    const detail = await this.fetchNinjaOneJsonWithFallback(baseUrl, accessToken, [
+      `/devices/${matchedId}`,
+      `/device/${matchedId}`
+    ]);
     return detail as Record<string, unknown>;
   }
 
@@ -1965,47 +2037,96 @@ export class ConnectorService {
       .map((value) => value.trim())
       .filter(Boolean);
     const effectiveOrganizationHints = (haloHints?.organizationHints ?? []).map((value) => value.trim()).filter(Boolean);
+    const shouldUseRawSearch = query ? looksLikeDeviceIdentityQuery(query) : false;
+    const candidateSearches = Array.from(
+      new Set([
+        shouldUseRawSearch ? query : "",
+        !shouldUseRawSearch && effectiveOrganizationHints.length > 0 ? effectiveOrganizationHints[0] ?? "" : ""
+      ].filter(Boolean))
+    );
 
-    const payload = await this.fetchNinjaOneJson(baseUrl, accessToken, "/devices", {
-      search: query || undefined,
-      organizationId
+    const candidatePayloads = await Promise.all([
+      this.fetchNinjaOneJson(baseUrl, accessToken, "/devices", {
+        organizationId
+      }),
+      ...candidateSearches.map((searchTerm) =>
+        this.fetchNinjaOneJson(baseUrl, accessToken, "/devices", {
+          search: searchTerm,
+          organizationId
+        })
+      )
+    ]);
+
+    const allDevices = dedupeTicketsById(
+      candidatePayloads.flatMap((payload) => this.normalizeNinjaOneCollection(payload))
+    ) as Record<string, unknown>[];
+
+    const filteredDevices = allDevices.filter((device) => {
+      if (effectiveUserHints.length === 0 && effectiveOrganizationHints.length === 0) {
+        return true;
+      }
+
+      const userMatch =
+        effectiveUserHints.length === 0 ||
+        effectiveUserHints.some((hint) => deviceMatchesUserHint(device, hint));
+      const organizationCandidate = pickString(device, ["organizationName", "organisationName", "customerName", "siteName"]);
+      const organizationMatch =
+        effectiveOrganizationHints.length === 0 ||
+        effectiveOrganizationHints.some((hint) => textMatches(organizationCandidate, hint));
+
+      if (effectiveUserHints.length > 0 && effectiveOrganizationHints.length > 0) {
+        return userMatch && organizationMatch;
+      }
+
+      return userMatch || organizationMatch;
     });
-    const allDevices = this.normalizeNinjaOneCollection(payload);
-    const devices = allDevices
-      .filter((device) => {
-        if (effectiveUserHints.length === 0 && effectiveOrganizationHints.length === 0) {
-          return true;
-        }
 
-        const userMatch =
-          effectiveUserHints.length === 0 ||
-          effectiveUserHints.some((hint) => deviceMatchesUserHint(device, hint));
-        const organizationCandidate = pickString(device, ["organizationName", "organisationName", "customerName", "siteName"]);
-        const organizationMatch =
-          effectiveOrganizationHints.length === 0 ||
-          effectiveOrganizationHints.some((hint) => textMatches(organizationCandidate, hint));
+    let rankedDevices = filteredDevices.length > 0 ? filteredDevices : allDevices;
 
-        return userMatch || organizationMatch;
-      })
-      .sort((left, right) => {
-        const leftScore =
-          Number(
-            effectiveUserHints.some((hint) => deviceMatchesUserHint(left, hint)) ||
-              effectiveOrganizationHints.some((hint) =>
-                textMatches(pickString(left, ["organizationName", "organisationName", "customerName", "siteName"]), hint)
-              )
-          ) +
-          Number(textMatches(pickString(left, ["systemName", "displayName", "hostname", "name"]), query));
-        const rightScore =
-          Number(
-            effectiveUserHints.some((hint) => deviceMatchesUserHint(right, hint)) ||
-              effectiveOrganizationHints.some((hint) =>
-                textMatches(pickString(right, ["organizationName", "organisationName", "customerName", "siteName"]), hint)
-              )
-          ) +
-          Number(textMatches(pickString(right, ["systemName", "displayName", "hostname", "name"]), query));
-        return rightScore - leftScore;
-      })
+    if (effectiveUserHints.length > 0) {
+      const topCandidates = rankedDevices
+        .sort(
+          (left, right) =>
+            scoreNinjaOneDevice(right, query, effectiveUserHints, effectiveOrganizationHints) -
+            scoreNinjaOneDevice(left, query, effectiveUserHints, effectiveOrganizationHints)
+        )
+        .slice(0, 15);
+
+      const detailedCandidates = await Promise.all(
+        topCandidates.map(async (device) => {
+          const deviceId = pickNumber(device, ["id", "deviceId", "device_id"]);
+          if (!deviceId) {
+            return device;
+          }
+
+          try {
+            return (await this.fetchNinjaOneJsonWithFallback(baseUrl, accessToken, [
+              `/devices/${deviceId}`,
+              `/device/${deviceId}`
+            ])) as Record<string, unknown>;
+          } catch {
+            return device;
+          }
+        })
+      );
+
+      const detailMatches = detailedCandidates.filter((device) =>
+        effectiveUserHints.some((hint) => deviceMatchesUserHint(device, hint))
+      );
+
+      if (detailMatches.length > 0) {
+        rankedDevices = detailMatches;
+      } else {
+        rankedDevices = detailedCandidates;
+      }
+    }
+
+    const devices = rankedDevices
+      .sort(
+        (left, right) =>
+          scoreNinjaOneDevice(right, query, effectiveUserHints, effectiveOrganizationHints) -
+          scoreNinjaOneDevice(left, query, effectiveUserHints, effectiveOrganizationHints)
+      )
       .slice(0, 50);
 
     return {
@@ -2029,7 +2150,10 @@ export class ConnectorService {
       throw new Error("Could not resolve a NinjaOne device id for alerts");
     }
 
-    const payload = await this.fetchNinjaOneJson(baseUrl, accessToken, `/device/${deviceId}/alerts`);
+    const payload = await this.fetchNinjaOneJsonWithFallback(baseUrl, accessToken, [
+      `/devices/${deviceId}/alerts`,
+      `/device/${deviceId}/alerts`
+    ]);
     const alerts = this.normalizeNinjaOneCollection(payload).slice(0, 50);
 
     return {
@@ -2057,7 +2181,10 @@ export class ConnectorService {
       throw new Error("Could not resolve a NinjaOne device id for activities");
     }
 
-    const payload = await this.fetchNinjaOneJson(baseUrl, accessToken, `/device/${deviceId}/activities`);
+    const payload = await this.fetchNinjaOneJsonWithFallback(baseUrl, accessToken, [
+      `/devices/${deviceId}/activities`,
+      `/device/${deviceId}/activities`
+    ]);
     const activities = this.normalizeNinjaOneCollection(payload).slice(0, 50);
 
     return {
@@ -2085,10 +2212,18 @@ export class ConnectorService {
     }
 
     const [alertsPayload, activitiesPayload, disksPayload] = await Promise.all([
-      this.tryFetchNinjaOneJson(baseUrl, accessToken, `/device/${deviceId}/alerts`),
-      this.tryFetchNinjaOneJson(baseUrl, accessToken, `/device/${deviceId}/activities`),
-      this.tryFetchNinjaOneJson(baseUrl, accessToken, `/device/${deviceId}/volumes`)
-        .then((payload) => payload ?? this.tryFetchNinjaOneJson(baseUrl, accessToken, `/device/${deviceId}/disks`))
+      this.tryFetchNinjaOneJson(baseUrl, accessToken, `/devices/${deviceId}/alerts`)
+        .then((payload) => payload ?? this.tryFetchNinjaOneJson(baseUrl, accessToken, `/device/${deviceId}/alerts`)),
+      this.tryFetchNinjaOneJson(baseUrl, accessToken, `/devices/${deviceId}/activities`)
+        .then((payload) => payload ?? this.tryFetchNinjaOneJson(baseUrl, accessToken, `/device/${deviceId}/activities`)),
+      this.tryFetchNinjaOneJson(baseUrl, accessToken, `/devices/${deviceId}/volumes`)
+        .then(
+          (payload) =>
+            payload
+            ?? this.tryFetchNinjaOneJson(baseUrl, accessToken, `/device/${deviceId}/volumes`)
+            ?? this.tryFetchNinjaOneJson(baseUrl, accessToken, `/devices/${deviceId}/disks`)
+            ?? this.tryFetchNinjaOneJson(baseUrl, accessToken, `/device/${deviceId}/disks`)
+        )
     ]);
 
     const alerts = alertsPayload ? this.normalizeNinjaOneCollection(alertsPayload).slice(0, 10) : [];
