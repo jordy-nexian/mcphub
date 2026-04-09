@@ -2235,16 +2235,24 @@ export class ConnectorService {
     });
 
     const hasTargetedHints = effectiveUserHints.length > 0 || effectiveOrganizationHints.length > 0;
+    const candidatePool =
+      filteredDevices.length > 0
+        ? filteredDevices
+        : options.requireUserMatch && hasTargetedHints
+          ? allDevices
+          : hasTargetedHints
+            ? []
+            : allDevices;
     let rankedDevices = filteredDevices.length > 0 ? filteredDevices : hasTargetedHints ? [] : allDevices;
 
     if (effectiveUserHints.length > 0) {
-      const topCandidates = rankedDevices
+      const topCandidates = candidatePool
         .sort(
           (left, right) =>
             scoreNinjaOneDevice(right, query, effectiveUserHints, effectiveOrganizationHints, effectiveDeviceHints) -
             scoreNinjaOneDevice(left, query, effectiveUserHints, effectiveOrganizationHints, effectiveDeviceHints)
         )
-        .slice(0, 15);
+        .slice(0, options.requireUserMatch ? 25 : 15);
 
       const detailedCandidates = await Promise.all(
         topCandidates.map(async (device) => {
@@ -2270,6 +2278,12 @@ export class ConnectorService {
 
       if (detailMatches.length > 0) {
         rankedDevices = detailMatches;
+      } else if (options.requireUserMatch && effectiveDeviceHints.length > 0) {
+        rankedDevices = detailedCandidates.filter((device) => {
+          const nameCandidate = pickString(device, ["systemName", "displayName", "hostname", "name"]);
+          const serialCandidate = pickString(device, ["serialNumber", "serial"]);
+          return effectiveDeviceHints.some((hint) => textMatches(nameCandidate, hint) || textMatches(serialCandidate, hint));
+        });
       } else if (!hasTargetedHints) {
         rankedDevices = detailedCandidates;
       } else {
