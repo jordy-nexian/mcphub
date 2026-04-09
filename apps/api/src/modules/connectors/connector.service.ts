@@ -527,6 +527,7 @@ type ResolvedEntityHints = {
 };
 
 const haloDebugEnabled = process.env.HALO_DEBUG === "true";
+const ninjaDebugEnabled = process.env.NINJA_DEBUG === "true";
 
 function logHaloDebug(event: string, payload: Record<string, unknown>) {
   if (!haloDebugEnabled) {
@@ -534,6 +535,14 @@ function logHaloDebug(event: string, payload: Record<string, unknown>) {
   }
 
   console.info("[halo-debug]", JSON.stringify({ event, ...payload }));
+}
+
+function logNinjaDebug(event: string, payload: Record<string, unknown>) {
+  if (!ninjaDebugEnabled) {
+    return;
+  }
+
+  console.info("[ninja-debug]", JSON.stringify({ event, ...payload }));
 }
 
 async function haloFetch(input: string | URL, init: RequestInit & { bodyPreview?: unknown } = {}) {
@@ -1993,12 +2002,30 @@ export class ConnectorService {
       }
     }
 
+    logNinjaDebug("request", {
+      method: "GET",
+      url: url.toString()
+    });
+
     const response = await fetch(url, {
       headers: this.buildNinjaOneHeaders(accessToken)
     });
 
+    logNinjaDebug("response", {
+      method: "GET",
+      url: url.toString(),
+      status: response.status,
+      ok: response.ok
+    });
+
     if (!response.ok) {
       const body = await response.text();
+      logNinjaDebug("error", {
+        method: "GET",
+        url: url.toString(),
+        status: response.status,
+        body
+      });
       throw new Error(`NinjaOne request failed (${response.status}) for ${path}: ${body}`);
     }
 
@@ -2011,6 +2038,11 @@ export class ConnectorService {
     });
 
     if (!response.ok) {
+      logNinjaDebug("optional-miss", {
+        method: "GET",
+        url: `${baseUrl}${path}`,
+        status: response.status
+      });
       return undefined;
     }
 
@@ -2192,6 +2224,16 @@ export class ConnectorService {
       ].filter(Boolean))
     );
 
+    logNinjaDebug("user-device-search", {
+      rawQuery,
+      cleanedQuery: query,
+      effectiveUserHints,
+      effectiveOrganizationHints,
+      effectiveDeviceHints,
+      candidateSearches,
+      requireUserMatch: Boolean(options.requireUserMatch)
+    });
+
     const candidatePayloads = await Promise.all([
       this.searchNinjaOneIndex(baseUrl, accessToken, {
         organizationId,
@@ -2290,6 +2332,16 @@ export class ConnectorService {
         rankedDevices = [];
       }
     }
+
+    logNinjaDebug("user-device-result", {
+      rawQuery,
+      candidatePoolSize: candidatePool.length,
+      filteredDeviceCount: filteredDevices.length,
+      resultCount: rankedDevices.length,
+      topResultIds: rankedDevices
+        .slice(0, 10)
+        .map((device) => pickNumber(device, ["id", "deviceId", "device_id"]) ?? pickString(device, ["id", "deviceId", "device_id"]))
+    });
 
     const devices = rankedDevices
       .sort(
