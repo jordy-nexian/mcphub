@@ -2111,11 +2111,13 @@ export class ConnectorService {
     const effectiveOrganizationHints = (haloHints?.organizationHints ?? []).map((value) => value.trim()).filter(Boolean);
     const effectiveDeviceHints = (haloHints?.deviceHints ?? []).map((value) => value.trim()).filter(Boolean);
     const shouldUseRawSearch = query ? looksLikeDeviceIdentityQuery(query) : false;
+    const usedHaloAssetBridge = effectiveDeviceHints.length > 0;
     const candidateSearches = Array.from(
       new Set([
+        ...(usedHaloAssetBridge ? effectiveDeviceHints.slice(0, 10) : []),
         shouldUseRawSearch ? query : "",
         !shouldUseRawSearch && effectiveOrganizationHints.length > 0 ? effectiveOrganizationHints[0] ?? "" : "",
-        ...effectiveDeviceHints.slice(0, 6)
+        ...(usedHaloAssetBridge ? [] : effectiveDeviceHints.slice(0, 6))
       ].filter(Boolean))
     );
 
@@ -2210,7 +2212,9 @@ export class ConnectorService {
               effectiveUserHints[0] || effectiveOrganizationHints[0]
                 ? ` related to ${effectiveUserHints[0] ?? effectiveOrganizationHints[0]}`
                 : ""
-            }. Results are condensed to device identity, organization, site, health, operating system, and serial information.`
+            }${
+              usedHaloAssetBridge ? " using Halo asset records as the device bridge." : "."
+            } Results are condensed to device identity, organization, site, health, operating system, and serial information.`
           : "No NinjaOne devices matched that search.",
       data: devices.map((device) => this.mapNinjaOneDevice(device)),
       source: "ninjaone"
