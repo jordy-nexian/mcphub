@@ -382,17 +382,19 @@ function buildIdentityVariants(value: string) {
   const dashed = pieces.join("-");
   const underscored = pieces.join("_");
   const emailLocalPart = normalized.includes("@") ? normalized.split("@")[0] : "";
+  const baseCandidates = [
+    pieces.length <= 2 ? normalized : "",
+    pieces.length <= 2 ? normalized.replace(/\s+/g, "") : "",
+    joined,
+    dashed,
+    underscored,
+    emailLocalPart,
+    normalized.replace(/^.*\\/, ""),
+    normalized.replace(/^.*\//, "")
+  ];
+
   const variants = new Set(
-    [
-      normalized,
-      normalized.replace(/\s+/g, ""),
-      joined,
-      dashed,
-      underscored,
-      emailLocalPart,
-      normalized.replace(/^.*\\/, ""),
-      normalized.replace(/^.*\//, "")
-    ]
+    baseCandidates
       .map((candidate) => candidate.trim())
       .filter(Boolean)
   );
@@ -415,7 +417,7 @@ function buildIdentityVariants(value: string) {
     variants.add(`AzureAD/${variant}`);
   }
 
-  return [...variants];
+  return [...variants].filter((candidate) => candidate.length <= 64 && !/\s{2,}/.test(candidate));
 }
 
 function deviceMatchesUserHint(device: Record<string, unknown>, userHint: string) {
