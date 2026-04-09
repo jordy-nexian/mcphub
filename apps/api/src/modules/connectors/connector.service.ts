@@ -496,6 +496,7 @@ type ResolvedEntityHints = {
   userHints: string[];
   organizationHints: string[];
   emailHints: string[];
+  deviceHints: string[];
 };
 
 const haloDebugEnabled = process.env.HALO_DEBUG === "true";
@@ -1552,7 +1553,8 @@ export class ConnectorService {
     const hints: ResolvedEntityHints = {
       userHints: [],
       organizationHints: [],
-      emailHints: []
+      emailHints: [],
+      deviceHints: []
     };
 
     const haloAccount = (await this.store.findByTenantUser(tenantId, userId)).find(
@@ -1565,6 +1567,7 @@ export class ConnectorService {
     const freshHalo = await this.ensureFreshAccount(haloAccount);
     const haloToken = this.encryption.decrypt(freshHalo.accessTokenEncrypted);
     const haloBaseUrl = this.getHaloBaseUrlForAccount(freshHalo);
+    let matchedCustomerId: number | undefined;
 
     try {
       const customers = await this.lookupHaloCustomers(haloBaseUrl, haloToken, query, 10);
@@ -1577,6 +1580,7 @@ export class ConnectorService {
         ) ?? customers[0];
 
       if (matchedCustomer) {
+        matchedCustomerId = pickNumber(matchedCustomer, ["id", "client_id"]);
         const customerName = pickString(matchedCustomer, ["name", "client_name", "organisation_name", "customer_name"]);
         if (customerName) {
           hints.organizationHints.push(customerName);
@@ -1606,10 +1610,78 @@ export class ConnectorService {
       // Optional enrichment only.
     }
 
+    try {
+      const assetLookups = [
+        { query, clientId: matchedCustomerId },
+        ...hints.emailHints.map((email) => ({ username: email, clientId: matchedCustomerId })),
+        ...hints.userHints.map((name) => ({ username: name, clientId: matchedCustomerId })),
+        ...hints.organizationHints.map((name) => ({ query: name, clientId: matchedCustomerId }))
+      ];
+
+      for (const assetLookup of assetLookups.slice(0, 6)) {
+        const assets = await this.lookupHaloAssets(haloBaseUrl, haloToken, {
+          ...assetLookup,
+          count: 15,
+          includeActive: true
+        });
+        for (const asset of assets) {
+          const assetName = pickString(asset, ["name", "inventory_number", "hostname"]);
+          const serialNumber = pickString(asset, ["serial_number", "serialno"]);
+          const siteName = pickString(asset, ["site_name", "location_name"]);
+          if (assetName) {
+            hints.deviceHints.push(assetName);
+          }
+          if (serialNumber) {
+            hints.deviceHints.push(serialNumber);
+          }
+          if (siteName) {
+            hints.organizationHints.push(siteName);
+          }
+        }
+      }
+    } catch {
+      // Optional enrichment only.
+    }
+
     hints.userHints = [...new Set(hints.userHints.map((value) => value.trim()).filter(Boolean))];
     hints.organizationHints = [...new Set(hints.organizationHints.map((value) => value.trim()).filter(Boolean))];
     hints.emailHints = [...new Set(hints.emailHints.map((value) => value.trim()).filter(Boolean))];
+    hints.deviceHints = [...new Set(hints.deviceHints.map((value) => value.trim()).filter(Boolean))];
     return hints;
+  }
+
+  private async lookupHaloAssets(
+    baseUrl: string,
+    accessToken: string,
+    options: {
+      query?: string;
+      clientId?: number;
+      siteId?: number;
+      username?: string;
+      includeActive?: boolean;
+      includeInactive?: boolean;
+      count?: number;
+    }
+  ) {
+    const url = new URL(`${baseUrl}/api/assets`);
+    url.searchParams.set("count", String(options.count ?? 25));
+    appendQueryValue(url, "search", options.query);
+    appendQueryValue(url, "client_id", options.clientId);
+    appendQueryValue(url, "site_id", options.siteId);
+    appendQueryValue(url, "username", options.username);
+    appendQueryValue(url, "includeactive", options.includeActive ?? true);
+    appendQueryValue(url, "includeinactive", options.includeInactive ?? false);
+
+    const response = await haloFetch(url, {
+      headers: buildHaloHeaders(accessToken)
+    });
+
+    if (!response.ok) {
+      return [] as HaloGenericRecord[];
+    }
+
+    const payload = (await response.json()) as unknown;
+    return normalizeCollectionPayload(payload, ["assets", "devices", "results", "data"]).slice(0, options.count ?? 25);
   }
 
   private async listHaloTicketActions(baseUrl: string, accessToken: string, input: Record<string, unknown>) {
@@ -2037,11 +2109,13 @@ export class ConnectorService {
       .map((value) => value.trim())
       .filter(Boolean);
     const effectiveOrganizationHints = (haloHints?.organizationHints ?? []).map((value) => value.trim()).filter(Boolean);
+    const effectiveDeviceHints = (haloHints?.deviceHints ?? []).map((value) => value.trim()).filter(Boolean);
     const shouldUseRawSearch = query ? looksLikeDeviceIdentityQuery(query) : false;
     const candidateSearches = Array.from(
       new Set([
         shouldUseRawSearch ? query : "",
-        !shouldUseRawSearch && effectiveOrganizationHints.length > 0 ? effectiveOrganizationHints[0] ?? "" : ""
+        !shouldUseRawSearch && effectiveOrganizationHints.length > 0 ? effectiveOrganizationHints[0] ?? "" : "",
+        ...effectiveDeviceHints.slice(0, 6)
       ].filter(Boolean))
     );
 
