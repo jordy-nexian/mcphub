@@ -2698,8 +2698,8 @@ export class ConnectorService {
     }
 
     const payload = await this.fetchNinjaOneJsonWithFallback(baseUrl, accessToken, [
-      `/devices/${deviceId}/alerts`,
-      `/device/${deviceId}/alerts`
+      `/device/${deviceId}/alerts`,
+      `/devices/${deviceId}/alerts`
     ]);
     const alerts = this.normalizeNinjaOneCollection(payload).slice(0, 50);
 
@@ -2758,28 +2758,62 @@ export class ConnectorService {
       throw new Error("Could not resolve a NinjaOne device id");
     }
 
-    const [alertsPayload, activitiesPayload, disksPayload] = await Promise.all([
-      this.tryFetchNinjaOneJson(baseUrl, accessToken, `/devices/${deviceId}/alerts`)
-        .then((payload) => payload ?? this.tryFetchNinjaOneJson(baseUrl, accessToken, `/device/${deviceId}/alerts`)),
+    const [
+      alertsPayload,
+      activitiesPayload,
+      disksPayload,
+      softwarePayload,
+      softwarePatchInstallsPayload,
+      osPatchInstallsPayload,
+      processorsPayload,
+      networkInterfacesPayload,
+      windowsServicesPayload
+    ] = await Promise.all([
+      this.tryFetchNinjaOneJson(baseUrl, accessToken, `/device/${deviceId}/alerts`)
+        .then((payload) => payload ?? this.tryFetchNinjaOneJson(baseUrl, accessToken, `/devices/${deviceId}/alerts`)),
       this.tryFetchNinjaOneJson(baseUrl, accessToken, `/device/${deviceId}/activities`)
         .then((payload) => payload ?? this.tryFetchNinjaOneJson(baseUrl, accessToken, `/devices/${deviceId}/activities`)),
-      this.tryFetchNinjaOneJson(baseUrl, accessToken, `/devices/${deviceId}/volumes`)
+      this.tryFetchNinjaOneJson(baseUrl, accessToken, `/device/${deviceId}/disks`)
         .then(
           (payload) =>
             payload
             ?? this.tryFetchNinjaOneJson(baseUrl, accessToken, `/device/${deviceId}/volumes`)
+            ?? this.tryFetchNinjaOneJson(baseUrl, accessToken, `/devices/${deviceId}/volumes`)
             ?? this.tryFetchNinjaOneJson(baseUrl, accessToken, `/devices/${deviceId}/disks`)
-            ?? this.tryFetchNinjaOneJson(baseUrl, accessToken, `/device/${deviceId}/disks`)
-        )
+        ),
+      this.tryFetchNinjaOneJson(baseUrl, accessToken, `/device/${deviceId}/software`)
+        .then((payload) => payload ?? this.tryFetchNinjaOneJson(baseUrl, accessToken, `/devices/${deviceId}/software`)),
+      this.tryFetchNinjaOneJson(baseUrl, accessToken, `/device/${deviceId}/software-patch-installs`).then(
+        (payload) => payload ?? this.tryFetchNinjaOneJson(baseUrl, accessToken, `/devices/${deviceId}/software-patch-installs`)
+      ),
+      this.tryFetchNinjaOneJson(baseUrl, accessToken, `/device/${deviceId}/os-patch-installs`)
+        .then((payload) => payload ?? this.tryFetchNinjaOneJson(baseUrl, accessToken, `/devices/${deviceId}/os-patch-installs`)),
+      this.tryFetchNinjaOneJson(baseUrl, accessToken, `/device/${deviceId}/processors`)
+        .then((payload) => payload ?? this.tryFetchNinjaOneJson(baseUrl, accessToken, `/devices/${deviceId}/processors`)),
+      this.tryFetchNinjaOneJson(baseUrl, accessToken, `/device/${deviceId}/network-interfaces`).then(
+        (payload) => payload ?? this.tryFetchNinjaOneJson(baseUrl, accessToken, `/devices/${deviceId}/network-interfaces`)
+      ),
+      this.tryFetchNinjaOneJson(baseUrl, accessToken, `/device/${deviceId}/windows-services`)
+        .then((payload) => payload ?? this.tryFetchNinjaOneJson(baseUrl, accessToken, `/devices/${deviceId}/windows-services`))
     ]);
 
     const alerts = alertsPayload ? this.normalizeNinjaOneCollection(alertsPayload).slice(0, 10) : [];
     const activities = activitiesPayload ? this.normalizeNinjaOneCollection(activitiesPayload).slice(0, 10) : [];
     const disks = disksPayload ? this.normalizeNinjaOneCollection(disksPayload).slice(0, 20) : [];
+    const software = softwarePayload ? this.normalizeNinjaOneCollection(softwarePayload).slice(0, 50) : [];
+    const softwarePatchInstalls = softwarePatchInstallsPayload
+      ? this.normalizeNinjaOneCollection(softwarePatchInstallsPayload).slice(0, 50)
+      : [];
+    const osPatchInstalls = osPatchInstallsPayload ? this.normalizeNinjaOneCollection(osPatchInstallsPayload).slice(0, 50) : [];
+    const processors = processorsPayload ? this.normalizeNinjaOneCollection(processorsPayload).slice(0, 20) : [];
+    const networkInterfaces = networkInterfacesPayload
+      ? this.normalizeNinjaOneCollection(networkInterfacesPayload).slice(0, 20)
+      : [];
+    const windowsServices = windowsServicesPayload ? this.normalizeNinjaOneCollection(windowsServicesPayload).slice(0, 50) : [];
     const mappedDevice = this.mapNinjaOneDevice(device);
 
     return {
-      summary: `Loaded NinjaOne device ${mappedDevice.name ?? deviceId}. Results include endpoint identity, health context, alerts, recent activities, and storage information where the API exposes it.`,
+      summary: `Loaded NinjaOne device ${mappedDevice.name ?? deviceId}. Results include endpoint identity, health context, alerts, recent activities, storage, software, patching, processors, network interfaces, and Windows service details where the API exposes them.`,
       data: [
         {
           ...mappedDevice,
@@ -2802,6 +2836,44 @@ export class ConnectorService {
             freeBytes: pickNumber(disk, ["free", "freeBytes", "available"]),
             usedPercent: pickNumber(disk, ["usedPercent", "usagePercent", "percentUsed"]),
             fileSystem: pickString(disk, ["fileSystem", "filesystem", "fsType"])
+          })),
+          software: software.map((entry) => ({
+            name: pickString(entry, ["name", "displayName", "softwareName"]),
+            version: pickString(entry, ["version", "displayVersion"]),
+            publisher: pickString(entry, ["publisher", "vendor"]),
+            installDate: pickString(entry, ["installDate", "installedAt", "date"])
+          })),
+          softwarePatchInstalls: softwarePatchInstalls.map((entry) => ({
+            name: pickString(entry, ["name", "title", "patchName"]),
+            kb: pickString(entry, ["kb", "kbNumber", "articleId"]),
+            status: pickString(entry, ["status", "result"]),
+            installedAt: pickString(entry, ["installedAt", "date", "createdAt"])
+          })),
+          osPatchInstalls: osPatchInstalls.map((entry) => ({
+            name: pickString(entry, ["name", "title", "patchName"]),
+            kb: pickString(entry, ["kb", "kbNumber", "articleId"]),
+            status: pickString(entry, ["status", "result"]),
+            installedAt: pickString(entry, ["installedAt", "date", "createdAt"])
+          })),
+          processors: processors.map((entry) => ({
+            name: pickString(entry, ["name", "model", "processorName"]),
+            manufacturer: pickString(entry, ["manufacturer", "vendor"]),
+            cores: pickNumber(entry, ["cores", "coreCount"]),
+            logicalProcessors: pickNumber(entry, ["logicalProcessors", "threadCount"]),
+            speed: pickString(entry, ["speed", "clockSpeed", "maxSpeed"])
+          })),
+          networkInterfaces: networkInterfaces.map((entry) => ({
+            name: pickString(entry, ["name", "interfaceName", "description"]),
+            macAddress: pickString(entry, ["macAddress", "mac"]),
+            ipv4: pickString(entry, ["ipv4", "ipAddress", "address"]),
+            ipv6: pickString(entry, ["ipv6"]),
+            status: pickString(entry, ["status", "state"])
+          })),
+          windowsServices: windowsServices.map((entry) => ({
+            name: pickString(entry, ["name", "serviceName", "displayName"]),
+            status: pickString(entry, ["status", "state"]),
+            startupType: pickString(entry, ["startupType", "startType"]),
+            logOnAs: pickString(entry, ["logOnAs", "account"])
           }))
         }
       ],
