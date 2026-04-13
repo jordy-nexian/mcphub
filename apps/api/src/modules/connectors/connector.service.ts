@@ -306,6 +306,50 @@ function normalizeCollectionPayload(payload: unknown, keys: string[]) {
   return [];
 }
 
+function extractHaloAssetRecords(payload: unknown) {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return [] as HaloGenericRecord[];
+  }
+
+  const record = payload as Record<string, unknown>;
+  const nestedUser =
+    record.user && typeof record.user === "object" && !Array.isArray(record.user)
+      ? (record.user as Record<string, unknown>)
+      : undefined;
+  const nestedSite =
+    record.site && typeof record.site === "object" && !Array.isArray(record.site)
+      ? (record.site as Record<string, unknown>)
+      : undefined;
+
+  return [
+    ...(Array.isArray(record.assets) ? (record.assets as HaloGenericRecord[]) : []),
+    ...(Array.isArray(record.userassets) ? (record.userassets as HaloGenericRecord[]) : []),
+    ...(Array.isArray(record.devices) ? (record.devices as HaloGenericRecord[]) : []),
+    ...(nestedUser && Array.isArray(nestedUser.assets) ? (nestedUser.assets as HaloGenericRecord[]) : []),
+    ...(nestedUser && Array.isArray(nestedUser.userassets) ? (nestedUser.userassets as HaloGenericRecord[]) : []),
+    ...(nestedSite && Array.isArray(nestedSite.assets) ? (nestedSite.assets as HaloGenericRecord[]) : []),
+    ...normalizeCollectionPayload(record, ["assets", "userassets", "devices", "results", "data"]),
+    ...(nestedUser ? normalizeCollectionPayload(nestedUser, ["assets", "userassets", "devices", "results", "data"]) : []),
+    ...(nestedSite ? normalizeCollectionPayload(nestedSite, ["assets", "userassets", "devices", "results", "data"]) : [])
+  ];
+}
+
+function extractHaloAssetIdentifiers(asset: HaloGenericRecord) {
+  const fieldValues = Array.isArray(asset.fields)
+    ? (asset.fields as HaloGenericRecord[])
+        .flatMap((field) => [pickString(field, ["value", "display", "name"])].filter(Boolean))
+        .filter(Boolean)
+    : [];
+
+  return [
+    pickString(asset, ["inventory_number", "inventoryNumber", "device_name", "deviceName"]),
+    pickString(asset, ["name", "hostname", "systemName", "key_field", "keyfield"]),
+    pickString(asset, ["serial_number", "serialno", "serial", "key_field2", "keyfield2"]),
+    pickString(asset, ["username", "business_owner_name", "technical_owner_name"]),
+    ...fieldValues
+  ].filter(Boolean) as string[];
+}
+
 function textMatches(value: string | undefined, query: string) {
   if (!value) {
     return false;
@@ -2445,19 +2489,11 @@ export class ConnectorService {
     }
 
     const haloUserPayload = (await haloUserDetail.json()) as Record<string, unknown>;
-    const haloAssets = [
-      ...normalizeCollectionPayload(haloUserPayload, ["userassets", "assets", "devices"]),
-      ...normalizeCollectionPayload(haloUserPayload.user ?? {}, ["userassets", "assets", "devices"])
-    ];
+    const haloAssets = extractHaloAssetRecords(haloUserPayload);
 
     const assetIdentifiers = Array.from(
       new Set(
-        haloAssets.flatMap((asset) =>
-          [
-            pickString(asset, ["inventory_number", "name", "hostname"]),
-            pickString(asset, ["serial_number", "serialno"])
-          ].filter(Boolean)
-        )
+        haloAssets.flatMap((asset) => extractHaloAssetIdentifiers(asset).map((value) => normalizeWhitespace(value)))
       )
     ) as string[];
 
@@ -2465,7 +2501,15 @@ export class ConnectorService {
       rawQuery,
       matchedUserId,
       matchedUserName: pickString(matchedUser, ["name", "display_name", "fullname", "full_name"]),
-      assetIdentifiers
+      haloAssetCount: haloAssets.length,
+      assetIdentifiers: assetIdentifiers.slice(0, 25),
+      sampleAssets: haloAssets.slice(0, 5).map((asset) => ({
+        id: pickNumber(asset, ["id", "asset_id"]),
+        inventoryNumber: pickString(asset, ["inventory_number", "inventoryNumber"]),
+        keyField: pickString(asset, ["key_field", "keyfield", "name", "hostname"]),
+        keyField2: pickString(asset, ["key_field2", "keyfield2", "serial_number", "serialno"]),
+        username: pickString(asset, ["username", "business_owner_name", "technical_owner_name"])
+      }))
     });
 
     if (assetIdentifiers.length === 0) {
