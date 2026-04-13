@@ -339,6 +339,59 @@ export class PlatformService {
     };
   }
 
+  async resetUserPassword(input: {
+    actorTenantId: string;
+    actorUserId: string;
+    userId: string;
+    temporaryPassword?: string;
+  }) {
+    await this.ensureSeedData();
+
+    const temporaryPassword =
+      input.temporaryPassword?.trim() || crypto.randomBytes(6).toString("base64url");
+
+    const userResult = await pool.query<UserRow>(
+      `
+        SELECT id, tenant_id, email, display_name, role, platform_role, status, last_active_at
+        FROM platform_users
+        WHERE id = $1
+        LIMIT 1
+      `,
+      [input.userId]
+    );
+    const user = userResult.rows[0];
+    if (!user) {
+      throw new Error("User not found");
+    }
+
+    await pool.query(
+      `
+        UPDATE platform_users
+        SET password_hash = $2,
+            updated_at = NOW()
+        WHERE id = $1
+      `,
+      [input.userId, hashPassword(temporaryPassword)]
+    );
+
+    await this.auditService.log({
+      tenantId: input.actorTenantId,
+      userId: input.actorUserId,
+      action: "USER_PASSWORD_RESET",
+      targetType: "platform_user",
+      targetId: input.userId,
+      metadata: { resetForTenantId: user.tenant_id, email: user.email }
+    });
+
+    return {
+      id: user.id,
+      tenantId: user.tenant_id,
+      email: user.email,
+      displayName: user.display_name,
+      temporaryPassword
+    };
+  }
+
   async getConnectorSummary() {
     await this.ensureSeedData();
 

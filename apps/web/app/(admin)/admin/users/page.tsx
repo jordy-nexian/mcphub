@@ -19,6 +19,14 @@ type UserRecord = {
   lastActiveAt: string;
 };
 
+type ResetPasswordResponse = {
+  id: string;
+  tenantId: string;
+  email: string;
+  displayName: string;
+  temporaryPassword: string;
+};
+
 type TenantRecord = {
   id: string;
   name: string;
@@ -155,6 +163,47 @@ export default function AdminUsersPage() {
     }
   }
 
+  async function resetUserPassword(user: UserRecord) {
+    if (!session) {
+      return;
+    }
+
+    const customPassword = window.prompt(
+      `Set a new temporary password for ${user.displayName} (${user.email}). Leave blank to auto-generate.`,
+      ""
+    );
+
+    if (customPassword === null) {
+      return;
+    }
+
+    setNotice("");
+
+    try {
+      const response = await fetch(`${apiOrigin}/platform/users/${user.id}/reset-password`, {
+        method: "POST",
+        credentials: "include",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${session.token}`
+        },
+        body: JSON.stringify({
+          temporaryPassword: customPassword || undefined
+        })
+      });
+
+      const payload = (await response.json()) as ResetPasswordResponse | { error?: string; message?: string };
+      if (!response.ok) {
+        throw new Error(("message" in payload && payload.message) || ("error" in payload && payload.error) || "Could not reset password");
+      }
+
+      const reset = payload as ResetPasswordResponse;
+      setNotice(`Reset password for ${reset.displayName}. Temporary password: ${reset.temporaryPassword}`);
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : "Could not reset password.");
+    }
+  }
+
   return (
     <div className="stack">
       <PageHeader
@@ -242,6 +291,7 @@ export default function AdminUsersPage() {
                 <th>Platform</th>
                 <th>Status</th>
                 <th>Last active</th>
+                <th>Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -254,6 +304,11 @@ export default function AdminUsersPage() {
                   <td><span className="chip">{user.platformRole}</span></td>
                   <td>{user.status}</td>
                   <td>{new Date(user.lastActiveAt).toLocaleString()}</td>
+                  <td>
+                    <button className="button secondary" type="button" onClick={() => void resetUserPassword(user)}>
+                      Reset password
+                    </button>
+                  </td>
                 </tr>
               ))}
             </tbody>

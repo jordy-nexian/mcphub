@@ -103,6 +103,10 @@ const createPlatformUserSchema = z.object({
   temporaryPassword: z.string().min(8).optional()
 });
 
+const resetPlatformUserPasswordSchema = z.object({
+  temporaryPassword: z.string().min(8).optional()
+});
+
 function parseBasicClientCredentials(authorizationHeader: string | undefined) {
   if (!authorizationHeader?.startsWith("Basic ")) {
     return undefined;
@@ -800,6 +804,25 @@ export function registerApiRoutes(
 
     const body = createPlatformUserSchema.parse(request.body);
     return deps.platformService.createUser(body);
+  });
+
+  app.post("/platform/users/:userId/reset-password", async (request, reply) => {
+    const auth = parsePlatformAuthFromRequest(request, deps.authService);
+    if (!auth) {
+      return reply.status(401).send({ error: "unauthorized" });
+    }
+    if (!hasPlatformConsoleAccess(auth)) {
+      return reply.status(403).send({ error: "forbidden" });
+    }
+
+    const { userId } = request.params as { userId: string };
+    const body = resetPlatformUserPasswordSchema.parse(request.body ?? {});
+    return deps.platformService.resetUserPassword({
+      actorTenantId: auth.tenantId,
+      actorUserId: auth.userId,
+      userId,
+      temporaryPassword: body.temporaryPassword
+    });
   });
 
   app.get("/platform/connectors", async (request, reply) => {
