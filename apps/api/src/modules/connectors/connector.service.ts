@@ -306,8 +306,16 @@ function normalizeCollectionPayload(payload: unknown, keys: string[]) {
   return [];
 }
 
-function extractHaloAssetRecords(payload: unknown) {
-  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+function payloadIsRecord(payload: unknown): payload is Record<string, unknown> {
+  return Boolean(payload) && typeof payload === "object" && !Array.isArray(payload);
+}
+
+function extractHaloAssetRecords(payload: unknown): HaloGenericRecord[] {
+  if (Array.isArray(payload)) {
+    return payload.flatMap((entry) => extractHaloAssetRecords(entry));
+  }
+
+  if (!payload || typeof payload !== "object") {
     return [] as HaloGenericRecord[];
   }
 
@@ -2488,7 +2496,13 @@ export class ConnectorService {
       throw new Error(`HaloPSA user asset lookup failed (${haloUserDetail.status}): ${body}`);
     }
 
-    const haloUserPayload = (await haloUserDetail.json()) as Record<string, unknown>;
+    const haloUserPayload = (await haloUserDetail.json()) as unknown;
+    const haloUserRecord =
+      Array.isArray(haloUserPayload) && haloUserPayload[0] && typeof haloUserPayload[0] === "object"
+        ? (haloUserPayload[0] as Record<string, unknown>)
+        : payloadIsRecord(haloUserPayload)
+          ? haloUserPayload
+          : {};
     const haloAssets = extractHaloAssetRecords(haloUserPayload);
 
     const assetIdentifiers = Array.from(
@@ -2501,9 +2515,10 @@ export class ConnectorService {
       rawQuery,
       matchedUserId,
       matchedUserName: pickString(matchedUser, ["name", "display_name", "fullname", "full_name"]),
+      haloUserPayloadType: Array.isArray(haloUserPayload) ? "array" : typeof haloUserPayload,
       haloAssetCount: haloAssets.length,
       assetIdentifiers: assetIdentifiers.slice(0, 25),
-      sampleAssets: haloAssets.slice(0, 5).map((asset) => ({
+      sampleAssets: haloAssets.slice(0, 5).map((asset: HaloGenericRecord) => ({
         id: pickNumber(asset, ["id", "asset_id"]),
         inventoryNumber: pickString(asset, ["inventory_number", "inventoryNumber"]),
         keyField: pickString(asset, ["key_field", "keyfield", "name", "hostname"]),
@@ -2514,7 +2529,7 @@ export class ConnectorService {
 
     if (assetIdentifiers.length === 0) {
       return {
-        summary: `Found HaloPSA user ${pickString(matchedUser, ["name", "display_name", "fullname", "full_name"]) ?? rawQuery}, but no user assets were returned from HaloPSA.`,
+        summary: `Found HaloPSA user ${pickString(haloUserRecord, ["name", "display_name", "fullname", "full_name"]) ?? pickString(matchedUser, ["name", "display_name", "fullname", "full_name"]) ?? rawQuery}, but no user assets were returned from HaloPSA.`,
         data: [],
         source: "ninjaone"
       };
@@ -2542,9 +2557,9 @@ export class ConnectorService {
     return {
       summary:
         devices.length > 0
-          ? `Found ${devices.length} NinjaOne devices for ${pickString(matchedUser, ["name", "display_name", "fullname", "full_name"]) ?? rawQuery} using Halo user assets as the device bridge.`
-          : `No NinjaOne devices matched the Halo user assets for ${pickString(matchedUser, ["name", "display_name", "fullname", "full_name"]) ?? rawQuery}.`,
-      data: devices.map((device) => this.mapNinjaOneDevice(device)),
+          ? `Found ${devices.length} NinjaOne devices for ${pickString(haloUserRecord, ["name", "display_name", "fullname", "full_name"]) ?? pickString(matchedUser, ["name", "display_name", "fullname", "full_name"]) ?? rawQuery} using Halo user assets as the device bridge.`
+          : `No NinjaOne devices matched the Halo user assets for ${pickString(haloUserRecord, ["name", "display_name", "fullname", "full_name"]) ?? pickString(matchedUser, ["name", "display_name", "fullname", "full_name"]) ?? rawQuery}.`,
+      data: devices.map((device: Record<string, unknown>) => this.mapNinjaOneDevice(device)),
       source: "ninjaone"
     };
   }
