@@ -358,6 +358,15 @@ function extractHaloAssetIdentifiers(asset: HaloGenericRecord) {
   ].filter(Boolean) as string[];
 }
 
+function extractHaloAssetSystemNames(asset: HaloGenericRecord) {
+  return [
+    pickString(asset, ["key_field", "keyfield", "name", "hostname", "systemName"]),
+    pickString(asset, ["inventory_number", "inventoryNumber"])
+  ]
+    .filter((value): value is string => Boolean(value))
+    .map((value) => normalizeWhitespace(value)) as string[];
+}
+
 function textMatches(value: string | undefined, query: string) {
   if (!value) {
     return false;
@@ -2573,6 +2582,9 @@ export class ConnectorService {
         haloAssets.flatMap((asset) => extractHaloAssetIdentifiers(asset).map((value) => normalizeWhitespace(value)))
       )
     ) as string[];
+    const assetSystemNames = Array.from(
+      new Set(haloAssets.flatMap((asset) => extractHaloAssetSystemNames(asset)))
+    ) as string[];
 
     logNinjaDebug("halo-user-assets", {
       rawQuery,
@@ -2580,6 +2592,7 @@ export class ConnectorService {
       matchedUserName: pickString(matchedUser, ["name", "display_name", "fullname", "full_name"]),
       haloUserPayloadType: Array.isArray(haloUserPayload) ? "array" : typeof haloUserPayload,
       haloAssetCount: haloAssets.length,
+      assetSystemNames,
       assetIdentifiers: assetIdentifiers.slice(0, 25),
       sampleAssets: haloAssets.slice(0, 5).map((asset: HaloGenericRecord) => ({
         id: pickNumber(asset, ["id", "asset_id"]),
@@ -2598,24 +2611,74 @@ export class ConnectorService {
       };
     }
 
-    const ninjaPayload = await this.searchNinjaOneIndex(baseUrl, accessToken, { limit: 1000 });
-    const allDevices = this.normalizeNinjaOneCollection(ninjaPayload);
-    const matchedDevices = allDevices.filter((device) => {
-      const systemName = pickString(device, ["systemName", "displayName", "name", "hostname"]);
-      const serialNumber = pickString(device, ["serialNumber", "serial"]);
-      return assetIdentifiers.some((identifier) => textMatches(systemName, identifier) || textMatches(serialNumber, identifier));
+    const ninjaPayload = await this.fetchNinjaOneJsonWithFallback(baseUrl, accessToken, ["/devices"], {
+      limit: 1000
     });
+    const allDevices = this.normalizeNinjaOneCollection(ninjaPayload);
+    const rankedMatches = allDevices
+      .map((device) => {
+        const systemName = normalizeWhitespace(
+          pickString(device, ["systemName", "displayName", "name", "hostname"]) ?? ""
+        );
+        const serialNumber = normalizeWhitespace(pickString(device, ["serialNumber", "serial"]) ?? "");
+        let score = 0;
+
+        for (const candidate of assetSystemNames) {
+          const normalizedCandidate = normalizeWhitespace(candidate);
+          if (!normalizedCandidate || !systemName) {
+            continue;
+          }
+          if (systemName.toLowerCase() === normalizedCandidate.toLowerCase()) {
+            score = Math.max(score, 100);
+          } else if (textMatches(systemName, normalizedCandidate) || textMatches(normalizedCandidate, systemName)) {
+            score = Math.max(score, 70);
+          }
+        }
+
+        for (const identifier of assetIdentifiers) {
+          const normalizedIdentifier = normalizeWhitespace(identifier);
+          if (!normalizedIdentifier) {
+            continue;
+          }
+          if (serialNumber && serialNumber.toLowerCase() === normalizedIdentifier.toLowerCase()) {
+            score = Math.max(score, 95);
+          } else if (serialNumber && textMatches(serialNumber, normalizedIdentifier)) {
+            score = Math.max(score, 65);
+          }
+        }
+
+        return { device, score };
+      })
+      .filter((entry) => entry.score > 0)
+      .sort((left, right) => right.score - left.score);
+    const matchedDevices = rankedMatches.map((entry) => entry.device);
+
+    const matchedDeviceIds = matchedDevices
+      .slice(0, 10)
+      .map((device) => pickNumber(device, ["id", "deviceId", "device_id"]))
+      .filter((value) => value !== undefined) as number[];
+
+    const detailedDevices = await Promise.all(
+      matchedDeviceIds.slice(0, 5).map(async (deviceId) => {
+        try {
+          return (await this.fetchNinjaOneJsonWithFallback(baseUrl, accessToken, [
+            `/device/${deviceId}`,
+            `/devices/${deviceId}`
+          ])) as Record<string, unknown>;
+        } catch {
+          return matchedDevices.find((device) => pickNumber(device, ["id", "deviceId", "device_id"]) === deviceId);
+        }
+      })
+    );
+    const devices = detailedDevices.filter(Boolean) as Record<string, unknown>[];
 
     logNinjaDebug("halo-asset-device-match", {
       rawQuery,
+      assetSystemNames,
       assetIdentifiers,
       totalDevices: allDevices.length,
-      matchedDeviceIds: matchedDevices
-        .slice(0, 20)
-        .map((device) => pickNumber(device, ["id", "deviceId", "device_id"]) ?? pickString(device, ["id", "deviceId", "device_id"]))
+      matchedDeviceIds
     });
-
-    const devices = matchedDevices.slice(0, 25);
 
     return {
       summary:
