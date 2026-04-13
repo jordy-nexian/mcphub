@@ -396,6 +396,19 @@ function extractMeaningfulQuery(query: string | undefined, noisePatterns: RegExp
   return normalizeWhitespace(normalized);
 }
 
+function isNinjaUnauthorizedError(error: unknown) {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+
+  const message = error.message.toLowerCase();
+  return (
+    message.includes("ninjaone request failed (401)") ||
+    message.includes("\"not_authenticated\"") ||
+    message.includes("invalid credentials")
+  );
+}
+
 function wantsOpenItems(input: Record<string, unknown>, query: string | undefined) {
   if (typeof input.includeClosed === "boolean") {
     return !input.includeClosed;
@@ -1148,39 +1161,67 @@ export class ConnectorService {
       throw new Error(`No active NinjaOne account found for ${tenantId}/${userId}`);
     }
 
-    const freshAccount = await this.ensureFreshAccount(account);
-    const accessToken = this.encryption.decrypt(freshAccount.accessTokenEncrypted);
-    const baseUrl = this.getNinjaOneBaseUrlForAccount(freshAccount);
+    const runWithAccount = async (currentAccount: ConnectedAccountRecord) => {
+      const accessToken = this.encryption.decrypt(currentAccount.accessTokenEncrypted);
+      const baseUrl = this.getNinjaOneBaseUrlForAccount(currentAccount);
 
-    switch (toolName) {
-      case "search_rmm_devices":
-      case "list_rmm_devices_for_site":
-        return this.searchNinjaOneDevices(tenantId, userId, baseUrl, accessToken, input);
-      case "get_user_devices":
-        return this.getUserDevicesViaHaloAssets(tenantId, userId, baseUrl, accessToken, input);
-      case "get_rmm_device_overview":
-        return this.getNinjaOneDeviceOverview(baseUrl, accessToken, input);
-      case "get_rmm_device_alerts":
-        return this.getNinjaOneDeviceAlerts(baseUrl, accessToken, input);
-      case "get_rmm_device_activities":
-        return this.getNinjaOneDeviceActivities(baseUrl, accessToken, input);
-      default: {
-        const tool = this.registry.get("ninjaone")?.getTools().find((candidate) => candidate.name === toolName);
-        if (!tool) {
-          throw new Error(`NinjaOne tool ${toolName} not found`);
+      switch (toolName) {
+        case "search_rmm_devices":
+        case "list_rmm_devices_for_site":
+          return this.searchNinjaOneDevices(tenantId, userId, baseUrl, accessToken, input);
+        case "get_user_devices":
+          return this.getUserDevicesViaHaloAssets(tenantId, userId, baseUrl, accessToken, input);
+        case "get_rmm_device_overview":
+          return this.getNinjaOneDeviceOverview(baseUrl, accessToken, input);
+        case "get_rmm_device_alerts":
+          return this.getNinjaOneDeviceAlerts(baseUrl, accessToken, input);
+        case "get_rmm_device_activities":
+          return this.getNinjaOneDeviceActivities(baseUrl, accessToken, input);
+        default: {
+          const tool = this.registry.get("ninjaone")?.getTools().find((candidate) => candidate.name === toolName);
+          if (!tool) {
+            throw new Error(`NinjaOne tool ${toolName} not found`);
+          }
+
+          return tool.execute(
+            {
+              tenantId,
+              userId,
+              roles,
+              requestId: crypto.randomUUID(),
+              accountId: currentAccount.id
+            },
+            input
+          );
         }
-
-        return tool.execute(
-          {
-            tenantId,
-            userId,
-            roles,
-            requestId: crypto.randomUUID(),
-            accountId: freshAccount.id
-          },
-          input
-        );
       }
+    };
+
+    const freshAccount = await this.ensureFreshAccount(account);
+
+    try {
+      return await runWithAccount(freshAccount);
+    } catch (error) {
+      if (!isNinjaUnauthorizedError(error) || !freshAccount.refreshTokenEncrypted) {
+        throw error;
+      }
+
+      const refreshed = await this.forceRefreshNinjaOneAccount(freshAccount);
+      if (
+        refreshed.accessTokenEncrypted !== freshAccount.accessTokenEncrypted ||
+        refreshed.refreshTokenEncrypted !== freshAccount.refreshTokenEncrypted ||
+        refreshed.expiresAt?.toISOString() !== freshAccount.expiresAt?.toISOString() ||
+        refreshed.status !== freshAccount.status
+      ) {
+        refreshed.updatedAt = new Date();
+        await this.store.upsert(refreshed);
+      }
+
+      if (refreshed.status !== "ACTIVE") {
+        throw error;
+      }
+
+      return runWithAccount(refreshed);
     }
   }
 
@@ -3436,6 +3477,10 @@ export class ConnectorService {
       return account;
     }
 
+    return this.forceRefreshNinjaOneAccount(account);
+  }
+
+  private async forceRefreshNinjaOneAccount(account: ConnectedAccountRecord): Promise<ConnectedAccountRecord> {
     if (!account.refreshTokenEncrypted) {
       return account;
     }
