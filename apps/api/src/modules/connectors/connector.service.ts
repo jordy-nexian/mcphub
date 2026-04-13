@@ -1096,7 +1096,7 @@ export class ConnectorService {
       case "list_rmm_devices_for_site":
         return this.searchNinjaOneDevices(tenantId, userId, baseUrl, accessToken, input);
       case "get_user_devices":
-        return this.searchNinjaOneDevices(tenantId, userId, baseUrl, accessToken, input, { requireUserMatch: true });
+        return this.getUserDevicesViaHaloAssets(tenantId, userId, baseUrl, accessToken, input);
       case "get_rmm_device_overview":
         return this.getNinjaOneDeviceOverview(baseUrl, accessToken, input);
       case "get_rmm_device_alerts":
@@ -2368,6 +2368,138 @@ export class ConnectorService {
               ? "No NinjaOne devices could be confidently linked to that specific user. Organization-only matches are intentionally excluded for this user-focused lookup."
               : "No NinjaOne devices could be confidently linked to that person or organization. Generic top devices are intentionally excluded until a real user, org, or asset match is found."
             : "No NinjaOne devices matched that search.",
+      data: devices.map((device) => this.mapNinjaOneDevice(device)),
+      source: "ninjaone"
+    };
+  }
+
+  private async getUserDevicesViaHaloAssets(
+    tenantId: string,
+    userId: string,
+    baseUrl: string,
+    accessToken: string,
+    input: Record<string, unknown>
+  ) {
+    const rawQuery = typeof input.query === "string" ? input.query.trim() : "";
+    if (!rawQuery) {
+      throw new Error("get_user_devices requires a user query");
+    }
+
+    const haloAccount = (await this.store.findByTenantUser(tenantId, userId)).find(
+      (candidate) => candidate.provider === "halopsa" && candidate.status === "ACTIVE"
+    );
+    if (!haloAccount) {
+      throw new Error(`No active HaloPSA account found for ${tenantId}/${userId}`);
+    }
+
+    const freshHalo = await this.ensureFreshAccount(haloAccount);
+    const haloToken = this.encryption.decrypt(freshHalo.accessTokenEncrypted);
+    const haloBaseUrl = this.getHaloBaseUrlForAccount(freshHalo);
+
+    const userSearchUrl = new URL(`${haloBaseUrl}/api/users`);
+    userSearchUrl.searchParams.set("count", "25");
+    userSearchUrl.searchParams.set("search", rawQuery);
+    const userSearchResponse = await haloFetch(userSearchUrl, {
+      headers: buildHaloHeaders(haloToken)
+    });
+
+    if (!userSearchResponse.ok) {
+      const body = await userSearchResponse.text();
+      throw new Error(`HaloPSA user lookup failed (${userSearchResponse.status}): ${body}`);
+    }
+
+    const userMatches = normalizeCollectionPayload(await userSearchResponse.json(), ["users", "contacts", "results", "data"]);
+    const matchedUser =
+      userMatches.find((candidate) =>
+        [
+          pickString(candidate, ["name", "display_name", "fullname", "full_name"]),
+          pickString(candidate, ["email", "emailaddress", "email_address"]),
+          pickString(candidate, ["username", "user_name"])
+        ].some((value) => textMatches(value, rawQuery))
+      ) ?? userMatches[0];
+
+    if (!matchedUser) {
+      return {
+        summary: `No HaloPSA user matched ${rawQuery}.`,
+        data: [],
+        source: "ninjaone"
+      };
+    }
+
+    const matchedUserId = pickNumber(matchedUser, ["id", "user_id", "contact_id"]);
+    if (!matchedUserId) {
+      return {
+        summary: `A HaloPSA user matched ${rawQuery}, but no user id was available to load assets.`,
+        data: [],
+        source: "ninjaone"
+      };
+    }
+
+    const haloUserDetail = await haloFetch(`${haloBaseUrl}/api/users/${matchedUserId}?includeuserassets=true`, {
+      headers: buildHaloHeaders(haloToken)
+    });
+
+    if (!haloUserDetail.ok) {
+      const body = await haloUserDetail.text();
+      throw new Error(`HaloPSA user asset lookup failed (${haloUserDetail.status}): ${body}`);
+    }
+
+    const haloUserPayload = (await haloUserDetail.json()) as Record<string, unknown>;
+    const haloAssets = [
+      ...normalizeCollectionPayload(haloUserPayload, ["userassets", "assets", "devices"]),
+      ...normalizeCollectionPayload(haloUserPayload.user ?? {}, ["userassets", "assets", "devices"])
+    ];
+
+    const assetIdentifiers = Array.from(
+      new Set(
+        haloAssets.flatMap((asset) =>
+          [
+            pickString(asset, ["inventory_number", "name", "hostname"]),
+            pickString(asset, ["serial_number", "serialno"])
+          ].filter(Boolean)
+        )
+      )
+    ) as string[];
+
+    logNinjaDebug("halo-user-assets", {
+      rawQuery,
+      matchedUserId,
+      matchedUserName: pickString(matchedUser, ["name", "display_name", "fullname", "full_name"]),
+      assetIdentifiers
+    });
+
+    if (assetIdentifiers.length === 0) {
+      return {
+        summary: `Found HaloPSA user ${pickString(matchedUser, ["name", "display_name", "fullname", "full_name"]) ?? rawQuery}, but no user assets were returned from HaloPSA.`,
+        data: [],
+        source: "ninjaone"
+      };
+    }
+
+    const ninjaPayload = await this.searchNinjaOneIndex(baseUrl, accessToken, { limit: 1000 });
+    const allDevices = this.normalizeNinjaOneCollection(ninjaPayload);
+    const matchedDevices = allDevices.filter((device) => {
+      const systemName = pickString(device, ["systemName", "displayName", "name", "hostname"]);
+      const serialNumber = pickString(device, ["serialNumber", "serial"]);
+      return assetIdentifiers.some((identifier) => textMatches(systemName, identifier) || textMatches(serialNumber, identifier));
+    });
+
+    logNinjaDebug("halo-asset-device-match", {
+      rawQuery,
+      assetIdentifiers,
+      totalDevices: allDevices.length,
+      matchedDeviceIds: matchedDevices
+        .slice(0, 20)
+        .map((device) => pickNumber(device, ["id", "deviceId", "device_id"]) ?? pickString(device, ["id", "deviceId", "device_id"]))
+    });
+
+    const devices = matchedDevices.slice(0, 25);
+
+    return {
+      summary:
+        devices.length > 0
+          ? `Found ${devices.length} NinjaOne devices for ${pickString(matchedUser, ["name", "display_name", "fullname", "full_name"]) ?? rawQuery} using Halo user assets as the device bridge.`
+          : `No NinjaOne devices matched the Halo user assets for ${pickString(matchedUser, ["name", "display_name", "fullname", "full_name"]) ?? rawQuery}.`,
       data: devices.map((device) => this.mapNinjaOneDevice(device)),
       source: "ninjaone"
     };
