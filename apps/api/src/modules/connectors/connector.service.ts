@@ -2487,7 +2487,7 @@ export class ConnectorService {
       };
     }
 
-    const haloUserDetail = await haloFetch(`${haloBaseUrl}/api/users/${matchedUserId}?includeuserassets=true`, {
+    const haloUserDetail = await haloFetch(`${haloBaseUrl}/api/users/${matchedUserId}?includeusersassets=true`, {
       headers: buildHaloHeaders(haloToken)
     });
 
@@ -2503,7 +2503,70 @@ export class ConnectorService {
         : payloadIsRecord(haloUserPayload)
           ? haloUserPayload
           : {};
-    const haloAssets = extractHaloAssetRecords(haloUserPayload);
+    let haloAssets = extractHaloAssetRecords(haloUserPayload);
+
+    if (haloAssets.length === 0) {
+      const assetSearchUrl = new URL(`${haloBaseUrl}/api/assets`);
+      assetSearchUrl.searchParams.set("count", "50");
+      assetSearchUrl.searchParams.set("includeinactive", "false");
+      assetSearchUrl.searchParams.set("includeactive", "true");
+
+      const matchedUserName =
+        pickString(haloUserRecord, ["name", "display_name", "fullname", "full_name"]) ??
+        pickString(matchedUser, ["name", "display_name", "fullname", "full_name"]);
+      const matchedUserEmail =
+        pickString(haloUserRecord, ["email", "emailaddress", "email_address"]) ??
+        pickString(matchedUser, ["email", "emailaddress", "email_address"]);
+      const matchedUserUsername =
+        pickString(haloUserRecord, ["username", "user_name", "samaccountname"]) ??
+        pickString(matchedUser, ["username", "user_name", "samaccountname"]);
+      const matchedSiteRecord = payloadIsRecord(haloUserRecord.site) ? haloUserRecord.site : undefined;
+      const matchedClientId =
+        pickNumber(haloUserRecord, ["client_id"]) ??
+        (matchedSiteRecord ? pickNumber(matchedSiteRecord, ["client_id"]) : undefined) ??
+        pickNumber(matchedUser, ["client_id"]);
+      const matchedSiteId =
+        pickNumber(haloUserRecord, ["site_id", "site_id_int"]) ??
+        pickNumber(matchedUser, ["site_id", "site_id_int"]);
+
+      if (matchedClientId !== undefined) {
+        assetSearchUrl.searchParams.set("client_id", String(matchedClientId));
+      }
+      if (matchedSiteId !== undefined) {
+        assetSearchUrl.searchParams.set("site_id", String(matchedSiteId));
+      }
+      if (matchedUserName) {
+        assetSearchUrl.searchParams.set("username", matchedUserName);
+        assetSearchUrl.searchParams.set("search", matchedUserName);
+      } else if (matchedUserEmail || matchedUserUsername) {
+        assetSearchUrl.searchParams.set("search", matchedUserEmail ?? matchedUserUsername ?? rawQuery);
+      } else {
+        assetSearchUrl.searchParams.set("search", rawQuery);
+      }
+
+      const assetSearchResponse = await haloFetch(assetSearchUrl, {
+        headers: buildHaloHeaders(haloToken)
+      });
+
+      if (assetSearchResponse.ok) {
+        haloAssets = normalizeCollectionPayload(await assetSearchResponse.json(), ["assets", "devices", "results", "data"]);
+        logNinjaDebug("halo-user-assets-fallback", {
+          rawQuery,
+          matchedUserId,
+          assetSearchUrl: assetSearchUrl.toString(),
+          fallbackAssetCount: haloAssets.length
+        });
+      } else {
+        const fallbackBody = await assetSearchResponse.text();
+        logNinjaDebug("halo-user-assets-fallback-error", {
+          rawQuery,
+          matchedUserId,
+          assetSearchUrl: assetSearchUrl.toString(),
+          status: assetSearchResponse.status,
+          body: fallbackBody.slice(0, 500)
+        });
+      }
+    }
 
     const assetIdentifiers = Array.from(
       new Set(
