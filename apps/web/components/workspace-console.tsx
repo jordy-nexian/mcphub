@@ -479,11 +479,6 @@ export function WorkspaceConsole({
       return;
     }
 
-    if (connector.id !== "halopsa") {
-      setNotice(`${connector.name} disconnect is still local-only until that connector is wired.`);
-      return;
-    }
-
     if (!session) {
       router.replace("/auth/login");
       return;
@@ -504,7 +499,7 @@ export function WorkspaceConsole({
     setState((current) => ({
       ...current,
       connectors: current.connectors.map((item) =>
-        item.id === id ? { ...item, status: "Disconnected", lastSync: "Disconnected locally" } : item
+        item.id === id ? { ...item, status: "Disconnected", lastSync: "Disconnected from backend" } : item
       ),
       audit: [makeAuditEvent("Connector disconnected", `${connector.name} was disconnected from the backend store.`), ...current.audit]
     }));
