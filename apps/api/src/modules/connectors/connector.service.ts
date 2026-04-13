@@ -2729,8 +2729,8 @@ export class ConnectorService {
     }
 
     const payload = await this.fetchNinjaOneJsonWithFallback(baseUrl, accessToken, [
-      `/devices/${deviceId}/activities`,
-      `/device/${deviceId}/activities`
+      `/device/${deviceId}/activities`,
+      `/devices/${deviceId}/activities`
     ]);
     const activities = this.normalizeNinjaOneCollection(payload).slice(0, 50);
 
@@ -2761,8 +2761,8 @@ export class ConnectorService {
     const [alertsPayload, activitiesPayload, disksPayload] = await Promise.all([
       this.tryFetchNinjaOneJson(baseUrl, accessToken, `/devices/${deviceId}/alerts`)
         .then((payload) => payload ?? this.tryFetchNinjaOneJson(baseUrl, accessToken, `/device/${deviceId}/alerts`)),
-      this.tryFetchNinjaOneJson(baseUrl, accessToken, `/devices/${deviceId}/activities`)
-        .then((payload) => payload ?? this.tryFetchNinjaOneJson(baseUrl, accessToken, `/device/${deviceId}/activities`)),
+      this.tryFetchNinjaOneJson(baseUrl, accessToken, `/device/${deviceId}/activities`)
+        .then((payload) => payload ?? this.tryFetchNinjaOneJson(baseUrl, accessToken, `/devices/${deviceId}/activities`)),
       this.tryFetchNinjaOneJson(baseUrl, accessToken, `/devices/${deviceId}/volumes`)
         .then(
           (payload) =>
