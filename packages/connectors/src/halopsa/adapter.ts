@@ -86,7 +86,7 @@ const haloTicketFiltersSchema = z.object({
 const haloListOpenTicketsTool: ConnectorToolDefinition<z.infer<typeof haloTicketFiltersSchema>, NormalizedToolResponse> = {
   name: "list_open_tickets",
   description:
-    "Use when the user wants a queue-style view of active tickets, open incidents, or tickets for a customer. Supports HaloPSA ticket filters such as client_id, site, status arrays, date search, pagination, ordering, and search fields.",
+    "Use when the user wants a queue-style view of active tickets, open incidents, or tickets for a customer. Also use for counting tickets, reporting on ticket volumes, or querying tickets by date range (e.g. 'last quarter', 'this month', 'last 30 days', 'Q1 2025', 'YTD'). Supports natural language date ranges, text search across summaries and categories, client_id, site, status arrays, category filters, pagination, ordering, and search fields. For counting or historical queries, pass the full natural language question as the query parameter.",
   inputSchema: haloTicketFiltersSchema,
   async execute(context, input) {
     return {

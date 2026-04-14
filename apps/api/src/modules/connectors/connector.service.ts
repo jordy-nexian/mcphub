@@ -36,6 +36,7 @@ type StoredConnectorConfig = {
 type N8nWorkflowRecord = Record<string, unknown>;
 type N8nExecutionRecord = Record<string, unknown>;
 type HaloStatusRecord = Record<string, unknown>;
+type HaloCategoryRecord = Record<string, unknown>;
 
 function pickString(record: Record<string, unknown>, keys: string[]) {
   for (const key of keys) {
@@ -162,7 +163,7 @@ function buildHaloCategoryPath(ticket: HaloTicketRecord) {
     pickString(ticket, ["category_4_name", "category4_name", "category_4", "category4"])
   ].filter((value): value is string => Boolean(value && value.trim()));
 
-  return parts.length > 0 ? parts.join(">") : undefined;
+  return parts.length > 0 ? parts.join(" > ") : undefined;
 }
 
 function buildNormalizedHaloTicket(ticket: HaloTicketRecord, resolvedStatus: string | undefined) {
@@ -458,7 +459,7 @@ function formatHaloDate(value: Date) {
   return `${year}-${month}-${day}`;
 }
 
-function extractNaturalHaloDateFilters(query: string | undefined) {
+function extractNaturalHaloDateFilters(query: string | undefined): { datesearch?: string; startdate?: string; enddate?: string } {
   if (!query) {
     return {};
   }
@@ -466,20 +467,110 @@ function extractNaturalHaloDateFilters(query: string | undefined) {
   const normalized = query.toLowerCase();
   const now = new Date();
 
+  const dateRange = (start: Date, end: Date) => ({
+    datesearch: "dateoccured",
+    startdate: formatHaloDate(start),
+    enddate: formatHaloDate(end)
+  });
+
+  // YTD / year to date
   if (/\b(ytd|year to date|start of (the )?year|since january|since jan(?:uary)? 1(st)?)\b/.test(normalized)) {
-    return {
-      datesearch: "dateoccured",
-      startdate: formatHaloDate(new Date(now.getFullYear(), 0, 1)),
-      enddate: formatHaloDate(now)
-    };
+    return dateRange(new Date(now.getFullYear(), 0, 1), now);
   }
 
+  // Last quarter / previous quarter
+  if (/\b(last quarter|previous quarter|prior quarter)\b/.test(normalized)) {
+    const currentQuarter = Math.floor(now.getMonth() / 3);
+    const lastQuarterStart = currentQuarter === 0
+      ? new Date(now.getFullYear() - 1, 9, 1)
+      : new Date(now.getFullYear(), (currentQuarter - 1) * 3, 1);
+    const lastQuarterEnd = currentQuarter === 0
+      ? new Date(now.getFullYear() - 1, 11, 31)
+      : new Date(now.getFullYear(), currentQuarter * 3, 0);
+    return dateRange(lastQuarterStart, lastQuarterEnd);
+  }
+
+  // This quarter / current quarter
+  if (/\b(this quarter|current quarter)\b/.test(normalized)) {
+    const quarterStart = Math.floor(now.getMonth() / 3) * 3;
+    return dateRange(new Date(now.getFullYear(), quarterStart, 1), now);
+  }
+
+  // Explicit quarter names: Q1, Q2, Q3, Q4 (with optional year)
+  const quarterMatch = normalized.match(/\bq([1-4])(?:\s+(\d{4}))?\b/);
+  if (quarterMatch) {
+    const q = parseInt(quarterMatch[1], 10);
+    const year = quarterMatch[2] ? parseInt(quarterMatch[2], 10) : now.getFullYear();
+    const qStart = new Date(year, (q - 1) * 3, 1);
+    const qEnd = new Date(year, q * 3, 0);
+    return dateRange(qStart, qEnd > now ? now : qEnd);
+  }
+
+  // This month / current month / MTD
   if (/\b(this month|current month|month to date|mtd)\b/.test(normalized)) {
-    return {
-      datesearch: "dateoccured",
-      startdate: formatHaloDate(new Date(now.getFullYear(), now.getMonth(), 1)),
-      enddate: formatHaloDate(now)
-    };
+    return dateRange(new Date(now.getFullYear(), now.getMonth(), 1), now);
+  }
+
+  // Last month / previous month
+  if (/\b(last month|previous month|prior month)\b/.test(normalized)) {
+    const lastMonthStart = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    const lastMonthEnd = new Date(now.getFullYear(), now.getMonth(), 0);
+    return dateRange(lastMonthStart, lastMonthEnd);
+  }
+
+  // This week / current week
+  if (/\b(this week|current week)\b/.test(normalized)) {
+    const dayOfWeek = now.getDay();
+    const weekStart = new Date(now.getFullYear(), now.getMonth(), now.getDate() - dayOfWeek);
+    return dateRange(weekStart, now);
+  }
+
+  // Last week / previous week
+  if (/\b(last week|previous week|prior week)\b/.test(normalized)) {
+    const dayOfWeek = now.getDay();
+    const lastWeekEnd = new Date(now.getFullYear(), now.getMonth(), now.getDate() - dayOfWeek - 1);
+    const lastWeekStart = new Date(lastWeekEnd.getFullYear(), lastWeekEnd.getMonth(), lastWeekEnd.getDate() - 6);
+    return dateRange(lastWeekStart, lastWeekEnd);
+  }
+
+  // Last N days/weeks/months
+  const lastNMatch = normalized.match(/\b(?:last|past|previous)\s+(\d+)\s+(days?|weeks?|months?)\b/);
+  if (lastNMatch) {
+    const n = parseInt(lastNMatch[1], 10);
+    const unit = lastNMatch[2].replace(/s$/, "");
+    const start = new Date(now);
+    if (unit === "day") {
+      start.setDate(start.getDate() - n);
+    } else if (unit === "week") {
+      start.setDate(start.getDate() - n * 7);
+    } else if (unit === "month") {
+      start.setMonth(start.getMonth() - n);
+    }
+    return dateRange(start, now);
+  }
+
+  // Last year / previous year
+  if (/\b(last year|previous year|prior year)\b/.test(normalized)) {
+    return dateRange(new Date(now.getFullYear() - 1, 0, 1), new Date(now.getFullYear() - 1, 11, 31));
+  }
+
+  // Specific month names: "in January", "in Feb 2025", "January 2025"
+  const monthNames = ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"];
+  const monthAbbrevs = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"];
+  const monthPattern = normalized.match(
+    /\b(?:in\s+|during\s+|for\s+)?(january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|jun|jul|aug|sep|oct|nov|dec)(?:\s+(\d{4}))?\b/
+  );
+  if (monthPattern) {
+    const monthName = monthPattern[1];
+    const monthIndex = monthNames.indexOf(monthName) !== -1
+      ? monthNames.indexOf(monthName)
+      : monthAbbrevs.indexOf(monthName);
+    if (monthIndex !== -1) {
+      const year = monthPattern[2] ? parseInt(monthPattern[2], 10) : now.getFullYear();
+      const monthStart = new Date(year, monthIndex, 1);
+      const monthEnd = new Date(year, monthIndex + 1, 0);
+      return dateRange(monthStart, monthEnd > now ? now : monthEnd);
+    }
   }
 
   return {};
@@ -532,17 +623,31 @@ function ticketMatchesHaloQuery(ticket: HaloTicketRecord, query: string) {
     return true;
   }
 
-  return [
+  const fields = [
     pickString(ticket, ["summary", "subject", "title"]),
     pickString(ticket, ["details", "description", "body"]),
     pickString(ticket, ["category_1_name", "category1_name", "category_1", "category1"]),
     pickString(ticket, ["category_2_name", "category2_name", "category_2", "category2"]),
     pickString(ticket, ["category_3_name", "category3_name", "category_3", "category3"]),
     pickString(ticket, ["category_4_name", "category4_name", "category_4", "category4"]),
-    pickString(ticket, ["requesttype_name", "request_type", "requesttype"]),
+    buildHaloCategoryPath(ticket),
+    pickString(ticket, ["requesttype_name", "request_type_name", "requesttype", "request_type"]),
+    pickString(ticket, ["tickettype_name", "ticket_type_name", "tickettype", "ticket_type"]),
     pickString(ticket, ["client_name", "customer_name", "organisation_name"]),
     pickString(ticket, ["site_name", "location_name"])
-  ].some((value) => textMatches(value, normalizedQuery));
+  ];
+
+  // Match if the full query matches any field, or if every query word matches at least one field
+  if (fields.some((value) => textMatches(value, normalizedQuery))) {
+    return true;
+  }
+
+  const queryWords = normalizedQuery.split(/\s+/).filter((word) => word.length >= 2);
+  if (queryWords.length > 1) {
+    return queryWords.every((word) => fields.some((value) => textMatches(value, word)));
+  }
+
+  return false;
 }
 
 function normalizeIdentityToken(value: string) {
@@ -764,6 +869,7 @@ export class ConnectorService {
   private readonly store = ConnectedAccountStore.createDefault();
   private readonly configStore = ConnectorConfigStore.createDefault();
   private readonly haloStatusCache = new Map<string, { expiresAt: number; records: HaloStatusRecord[] }>();
+  private readonly haloCategoryCache = new Map<string, { expiresAt: number; records: HaloCategoryRecord[] }>();
 
   constructor(private readonly auditService: AuditService) {
     this.redis?.on("error", (error) => {
@@ -1409,7 +1515,20 @@ export class ConnectorService {
       /\bincidents?\b/g,
       /\brequests?\b/g,
       /\bfor\b/g,
-      /\b(ytd|year to date|start of (the )?year|since january|since jan(?:uary)? 1(st)?|this month|current month|month to date|mtd)\b/g
+      /\bhow many\b/g,
+      /\bcount\b/g,
+      /\bnumber of\b/g,
+      /\btotal\b/g,
+      /\b(ytd|year to date|start of (the )?year|since january|since jan(?:uary)? 1(st)?)\b/g,
+      /\b(this month|current month|month to date|mtd)\b/g,
+      /\b(last quarter|previous quarter|prior quarter|this quarter|current quarter)\b/g,
+      /\bq[1-4](?:\s+\d{4})?\b/g,
+      /\b(last month|previous month|prior month)\b/g,
+      /\b(this week|current week|last week|previous week|prior week)\b/g,
+      /\b(?:last|past|previous)\s+\d+\s+(?:days?|weeks?|months?)\b/g,
+      /\b(last year|previous year|prior year)\b/g,
+      /\b(?:in|during)\s+(?:january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|jun|jul|aug|sep|oct|nov|dec)(?:\s+\d{4})?\b/g,
+      /\b(?:january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|jun|jul|aug|sep|oct|nov|dec)\s+\d{4}\b/g
     ]);
     const effectiveFilters: Record<string, unknown> = {
       ...naturalDateFilters,
@@ -1453,23 +1572,37 @@ export class ConnectorService {
       resolvedCustomerName = matchedCustomerNames[0];
     }
 
+    const isCountingQuery = /\b(how many|count|number of|total|tally)\b/i.test(rawQuery ?? "");
+    const isTemporalQuery = hasNaturalDateFilter || /\b(last|previous|prior|since|during|between)\b/i.test(rawQuery ?? "");
+    const needsComprehensiveResults = isCountingQuery || isTemporalQuery;
     const requestedLimit =
       pickNumber(effectiveFilters, ["limit", "count", "top"]) ??
-      (typeof rawQuery === "string" && /\b(all)\b/i.test(rawQuery) ? 250 : 100);
-    const limit = Math.max(1, Math.min(requestedLimit, 100));
+      (typeof rawQuery === "string" && /\b(all)\b/i.test(rawQuery) ? 250 : needsComprehensiveResults ? 250 : 100);
+    const limit = Math.max(1, Math.min(requestedLimit, 250));
     const includeClosed =
       structuredClosedOnly === true
         ? true
         : structuredOpenOnly === true
           ? false
-          : !wantsOpenItems(input, rawQuery);
+          : needsComprehensiveResults
+            ? true
+            : !wantsOpenItems(input, rawQuery);
+
+    // Resolve query terms to Halo category IDs for server-side filtering
+    const resolvedCategoryIds = query
+      ? await this.resolveHaloCategoryIds(baseUrl, accessToken, query)
+      : [];
+    if (resolvedCategoryIds.length > 0 && !effectiveFilters.category_1) {
+      effectiveFilters.category_1 = resolvedCategoryIds;
+    }
+
     const searchAliases = query ? buildSearchAliases(query, matchedCustomerNames) : [];
     const fetchedTicketGroups = await Promise.all([
       ...(matchedClientIds.length > 0
         ? matchedClientIds.map((matchedId) =>
             this.fetchHaloTickets(baseUrl, accessToken, {
               clientId: matchedId,
-              query: hasNaturalDateFilter ? undefined : query,
+              query,
               includeClosed,
               limit,
               filters: effectiveFilters
@@ -1479,7 +1612,7 @@ export class ConnectorService {
       ...(searchAliases.length > 0
         ? searchAliases.map((alias) =>
             this.fetchHaloTickets(baseUrl, accessToken, {
-              query: hasNaturalDateFilter ? undefined : alias,
+              query: alias,
               includeClosed,
               limit,
               filters: effectiveFilters
@@ -1489,13 +1622,24 @@ export class ConnectorService {
           ? [
               this.fetchHaloTickets(baseUrl, accessToken, {
                 clientId,
-                query: hasNaturalDateFilter ? undefined : query,
+                query,
                 includeClosed,
                 limit,
                 filters: effectiveFilters
               })
             ]
-          : [])
+          : []),
+      // When category IDs resolved but no customer match, also fetch by category without text search
+      ...(resolvedCategoryIds.length > 0 && matchedClientIds.length === 0 && !query
+        ? [
+            this.fetchHaloTickets(baseUrl, accessToken, {
+              clientId,
+              includeClosed,
+              limit,
+              filters: effectiveFilters
+            })
+          ]
+        : [])
     ]);
     const tickets = dedupeTicketsById(fetchedTicketGroups.flat());
 
@@ -1504,13 +1648,19 @@ export class ConnectorService {
         if (structuredClosedOnly === true) {
           return !isTicketOpen(ticket);
         }
-        if (structuredOpenOnly === true || wantsOpenItems(effectiveFilters, rawQuery)) {
+        if (structuredOpenOnly === true) {
+          return isTicketOpen(ticket);
+        }
+        if (needsComprehensiveResults) {
+          return true;
+        }
+        if (wantsOpenItems(effectiveFilters, rawQuery)) {
           return isTicketOpen(ticket);
         }
         return true;
       })
       .filter((ticket) => {
-        if (!query || !hasNaturalDateFilter) {
+        if (!query) {
           return true;
         }
 
@@ -1555,11 +1705,27 @@ export class ConnectorService {
       }))
     );
 
+    const statusLabel = structuredClosedOnly
+      ? "closed "
+      : structuredOpenOnly
+        ? "open "
+        : needsComprehensiveResults
+          ? ""
+          : wantsOpenItems(effectiveFilters, rawQuery)
+            ? "open "
+            : "";
+    const dateLabel = hasNaturalDateFilter
+      ? ` (date range: ${naturalDateFilters.startdate} to ${naturalDateFilters.enddate})`
+      : "";
+    const categoryLabel = resolvedCategoryIds.length > 0
+      ? ` matching category filter`
+      : "";
+
     return {
       summary:
         normalizedStatuses.length > 0
-          ? `Found ${normalizedStatuses.length} ${wantsOpenItems(effectiveFilters, rawQuery) ? "open " : ""}HaloPSA tickets${resolvedCustomerName ? ` for ${resolvedCustomerName}` : ""}. Results are condensed to ticket id, summary, status, customer, priority, and latest update.`
-          : `No ${wantsOpenItems(effectiveFilters, rawQuery) ? "open " : ""}HaloPSA tickets found${resolvedCustomerName ? ` for ${resolvedCustomerName}` : ""}.`,
+          ? `Found ${normalizedStatuses.length} ${statusLabel}HaloPSA tickets${resolvedCustomerName ? ` for ${resolvedCustomerName}` : ""}${dateLabel}${categoryLabel}. Results are condensed to ticket id, summary, status, customer, priority, category path, and latest update.`
+          : `No ${statusLabel}HaloPSA tickets found${resolvedCustomerName ? ` for ${resolvedCustomerName}` : ""}${dateLabel}${categoryLabel}.`,
       data: normalizedStatuses.map(({ ticket, status }) => buildNormalizedHaloTicket(ticket, status)),
       source: "halopsa"
     };
@@ -1730,7 +1896,8 @@ export class ConnectorService {
 
       if (options.clientId) {
         url.searchParams.set("client_id", String(options.clientId));
-      } else if (options.query && !url.searchParams.has("search")) {
+      }
+      if (options.query && !url.searchParams.has("search")) {
         url.searchParams.set("search", options.query);
       }
 
@@ -1810,6 +1977,74 @@ export class ConnectorService {
       (match ? getHaloTicketStatus(match) : undefined) ??
       pickString(match ?? {}, ["name", "label", "displayName", "text"])
     );
+  }
+
+  private async fetchHaloCategories(baseUrl: string, accessToken: string): Promise<HaloCategoryRecord[]> {
+    const cacheKey = `${baseUrl}|${accessToken.slice(0, 12)}`;
+    const cached = this.haloCategoryCache.get(cacheKey);
+    if (cached && cached.expiresAt > Date.now()) {
+      return cached.records;
+    }
+
+    for (const path of ["/api/Category", "/api/category", "/api/categories"]) {
+      const url = new URL(`${baseUrl}${path}`);
+      url.searchParams.set("count", "500");
+      url.searchParams.set("type", "0");
+
+      const response = await haloFetch(url, {
+        headers: buildHaloHeaders(accessToken)
+      });
+
+      if (!response.ok) {
+        continue;
+      }
+
+      const payload = (await response.json()) as unknown;
+      const records = normalizeCollectionPayload(payload, ["categories", "results", "data"]);
+      if (records.length > 0) {
+        this.haloCategoryCache.set(cacheKey, { expiresAt: Date.now() + 10 * 60 * 1000, records });
+        return records;
+      }
+    }
+
+    return [];
+  }
+
+  private async resolveHaloCategoryIds(baseUrl: string, accessToken: string, query: string): Promise<number[]> {
+    if (!query.trim()) {
+      return [];
+    }
+
+    const categories = await this.fetchHaloCategories(baseUrl, accessToken);
+    if (categories.length === 0) {
+      return [];
+    }
+
+    const normalizedQuery = query.toLowerCase();
+    const queryWords = normalizedQuery.split(/\s+/).filter((word) => word.length >= 2);
+
+    const matchedIds: number[] = [];
+    for (const category of categories) {
+      const categoryName = pickString(category, ["name", "value", "label", "text", "category_name"])?.toLowerCase();
+      if (!categoryName) {
+        continue;
+      }
+
+      const categoryId = pickNumber(category, ["id", "category_id"]);
+      if (typeof categoryId !== "number") {
+        continue;
+      }
+
+      // Match if the full query matches the category name or any query word matches
+      if (
+        textMatches(categoryName, normalizedQuery) ||
+        queryWords.some((word) => textMatches(categoryName, word))
+      ) {
+        matchedIds.push(categoryId);
+      }
+    }
+
+    return matchedIds;
   }
 
   private async resolveHaloEntityHints(tenantId: string, userId: string, query: string): Promise<ResolvedEntityHints> {
