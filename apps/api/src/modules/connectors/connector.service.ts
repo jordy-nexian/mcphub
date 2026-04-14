@@ -1575,10 +1575,7 @@ export class ConnectorService {
     const isCountingQuery = /\b(how many|count|number of|total|tally)\b/i.test(rawQuery ?? "");
     const isTemporalQuery = hasNaturalDateFilter || /\b(last|previous|prior|since|during|between)\b/i.test(rawQuery ?? "");
     const needsComprehensiveResults = isCountingQuery || isTemporalQuery;
-    const requestedLimit =
-      pickNumber(effectiveFilters, ["limit", "count", "top"]) ??
-      (typeof rawQuery === "string" && /\b(all)\b/i.test(rawQuery) ? 250 : needsComprehensiveResults ? 250 : 100);
-    const limit = Math.max(1, Math.min(requestedLimit, 250));
+    const limit = needsComprehensiveResults ? 250 : typeof rawQuery === "string" && /\b(all)\b/i.test(rawQuery) ? 250 : 100;
     const includeClosed =
       structuredClosedOnly === true
         ? true
@@ -1588,9 +1585,9 @@ export class ConnectorService {
             ? true
             : !wantsOpenItems(input, rawQuery);
 
-    // Resolve query terms to Halo category IDs for server-side filtering.
-    // Strip out customer names first so they don't pollute category matching.
-    const categoryQuery = query
+    // Strip customer names from the query so the API search only contains the topic.
+    // e.g. "sftp cmutual" → "sftp" when CMutual was resolved as a customer.
+    const topicQuery = matchedCustomerNames.length > 0
       ? matchedCustomerNames
           .reduce(
             (q, name) => q.replace(new RegExp(name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi"), " "),
@@ -1598,55 +1595,62 @@ export class ConnectorService {
           )
           .replace(/\s+/g, " ")
           .trim()
-      : "";
-    const resolvedCategoryIds = categoryQuery
-      ? await this.resolveHaloCategoryIds(baseUrl, accessToken, categoryQuery)
+      : query;
+
+    // Resolve topic terms to Halo category IDs for server-side filtering.
+    const resolvedCategoryIds = topicQuery
+      ? await this.resolveHaloCategoryIds(baseUrl, accessToken, topicQuery)
       : [];
-    if (resolvedCategoryIds.length > 0 && !effectiveFilters.category_1) {
-      effectiveFilters.category_1 = resolvedCategoryIds;
+
+    // Build filters for the API — strip any AI-supplied count/page_size/limit
+    // so our comprehensive limit is respected.
+    const apiFilters = { ...effectiveFilters };
+    if (needsComprehensiveResults) {
+      delete apiFilters.count;
+      delete apiFilters.page_size;
+      delete apiFilters.limit;
+      delete apiFilters.top;
     }
 
-    const searchAliases = query ? buildSearchAliases(query, matchedCustomerNames) : [];
+    // Fetch strategy: separate calls for different filter combinations,
+    // then merge and deduplicate. Category IDs are used in a separate
+    // fetch so they don't AND with text search and over-filter results.
     const fetchedTicketGroups = await Promise.all([
+      // Primary fetch: by client + topic search + date filters
       ...(matchedClientIds.length > 0
         ? matchedClientIds.map((matchedId) =>
             this.fetchHaloTickets(baseUrl, accessToken, {
               clientId: matchedId,
-              query,
+              query: topicQuery || undefined,
               includeClosed,
               limit,
-              filters: effectiveFilters
+              filters: apiFilters
             })
           )
         : []),
-      ...(searchAliases.length > 0
-        ? searchAliases.map((alias) =>
+      // If category IDs resolved, fetch by client + category (no text search)
+      // so we also find tickets where the topic is only in the category, not summary
+      ...(resolvedCategoryIds.length > 0 && matchedClientIds.length > 0
+        ? matchedClientIds.map((matchedId) =>
             this.fetchHaloTickets(baseUrl, accessToken, {
-              query: alias,
+              clientId: matchedId,
               includeClosed,
               limit,
-              filters: effectiveFilters
+              filters: { ...apiFilters, category_1: resolvedCategoryIds }
             })
           )
-        : matchedClientIds.length === 0
-          ? [
-              this.fetchHaloTickets(baseUrl, accessToken, {
-                clientId,
-                query,
-                includeClosed,
-                limit,
-                filters: effectiveFilters
-              })
-            ]
-          : []),
-      // When category IDs resolved but no customer match, also fetch by category without text search
-      ...(resolvedCategoryIds.length > 0 && matchedClientIds.length === 0 && !query
+        : []),
+      // No customer matched — fall back to text search or category search
+      ...(matchedClientIds.length === 0
         ? [
             this.fetchHaloTickets(baseUrl, accessToken, {
               clientId,
+              query: topicQuery || undefined,
               includeClosed,
               limit,
-              filters: effectiveFilters
+              filters: resolvedCategoryIds.length > 0
+                ? { ...apiFilters, category_1: resolvedCategoryIds }
+                : apiFilters
             })
           ]
         : [])
@@ -1670,11 +1674,11 @@ export class ConnectorService {
         return true;
       })
       .filter((ticket) => {
-        if (!query) {
+        if (!topicQuery) {
           return true;
         }
 
-        return ticketMatchesHaloQuery(ticket, query);
+        return ticketMatchesHaloQuery(ticket, topicQuery);
       })
       .filter((ticket) => {
         if (matchedClientIds.length === 0) {
@@ -1822,20 +1826,18 @@ export class ConnectorService {
       filters?: Record<string, unknown>;
     }
   ) {
-    const requestedPageSize =
-      pickNumber(options.filters ?? {}, ["page_size", "count", "limit", "top"]) ?? options.limit;
-    const pageSize = Math.min(Math.max(requestedPageSize, 50), 200);
-    const maxResults = Math.max(options.limit, pageSize);
+    const pageSize = Math.min(Math.max(options.limit, 50), 200);
+    const maxResults = options.limit;
     const collected: HaloTicketRecord[] = [];
 
     for (let page = 1; page <= 10 && collected.length < maxResults; page += 1) {
       const url = new URL(`${baseUrl}/api/tickets`);
       const filters = options.filters ?? {};
-      appendQueryValue(url, "count", pickNumber(filters, ["count"]) ?? pageSize);
+      appendQueryValue(url, "count", pageSize);
       appendQueryValue(url, "includeclosed", options.includeClosed);
       appendQueryValue(url, "paginate", typeof filters.paginate === "boolean" ? filters.paginate : true);
-      appendQueryValue(url, "page_no", pickNumber(filters, ["page_no"]) ?? page);
-      appendQueryValue(url, "page_size", pickNumber(filters, ["page_size"]) ?? pageSize);
+      appendQueryValue(url, "page_no", page);
+      appendQueryValue(url, "page_size", pageSize);
       for (const key of [
         "order",
         "orderdesc",
