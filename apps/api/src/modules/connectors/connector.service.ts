@@ -154,6 +154,61 @@ function buildHaloOpenRuleFields(ticket: HaloTicketRecord, resolvedStatus: strin
   };
 }
 
+function buildHaloCategoryPath(ticket: HaloTicketRecord) {
+  const parts = [
+    pickString(ticket, ["category_1_name", "category1_name", "category_1", "category1"]),
+    pickString(ticket, ["category_2_name", "category2_name", "category_2", "category2"]),
+    pickString(ticket, ["category_3_name", "category3_name", "category_3", "category3"]),
+    pickString(ticket, ["category_4_name", "category4_name", "category_4", "category4"])
+  ].filter((value): value is string => Boolean(value && value.trim()));
+
+  return parts.length > 0 ? parts.join(">") : undefined;
+}
+
+function buildNormalizedHaloTicket(ticket: HaloTicketRecord, resolvedStatus: string | undefined) {
+  const openFields = buildHaloOpenRuleFields(ticket, resolvedStatus);
+  const requestTypeName =
+    pickString(ticket, [
+      "requesttype_name",
+      "request_type_name",
+      "requesttype",
+      "request_type",
+      "itil_requesttype_name",
+      "itil_requesttype"
+    ]) ?? pickNestedString(ticket, ["requesttype", "request_type", "itil_requesttype"]);
+  const ticketTypeName =
+    pickString(ticket, ["tickettype_name", "ticket_type_name", "tickettype", "ticket_type", "type_name", "type"]) ??
+    pickNestedString(ticket, ["tickettype", "ticket_type", "type"]);
+  const workflowStepName =
+    pickString(ticket, ["workflow_step_name", "workflowstep_name", "step_name", "workflow_status", "ticket_status"]) ??
+    pickNestedString(ticket, ["workflow_step", "workflowstep", "workflow_status", "ticket_status"]);
+
+  return {
+    id: pickNumber(ticket, ["id", "ticket_id", "TicketID"]),
+    summary: pickString(ticket, ["summary", "subject", "title"]) ?? "Untitled ticket",
+    status: resolvedStatus,
+    customer: pickString(ticket, ["client_name", "customer_name", "organisation_name"]),
+    priority: pickString(ticket, ["priority_name", "priority"]),
+    lastActionAt: pickString(ticket, ["last_action_date", "lastupdated", "dateupdated"]),
+    category_1:
+      pickString(ticket, ["category_1_name", "category1_name", "category_1", "category1"]) ?? undefined,
+    category_2:
+      pickString(ticket, ["category_2_name", "category2_name", "category_2", "category2"]) ?? undefined,
+    category_3:
+      pickString(ticket, ["category_3_name", "category3_name", "category_3", "category3"]) ?? undefined,
+    category_4:
+      pickString(ticket, ["category_4_name", "category4_name", "category_4", "category4"]) ?? undefined,
+    category_path: buildHaloCategoryPath(ticket),
+    request_type_name: requestTypeName,
+    ticket_type_name: ticketTypeName,
+    workflow_step_name: workflowStepName,
+    is_closed: !openFields.isOpenByRule,
+    resolved_status: resolvedStatus ?? "Unknown",
+    ...openFields,
+    raw: ticket
+  };
+}
+
 function isProjectStyleTicket(ticket: HaloTicketRecord) {
   const requestType =
     pickString(ticket, [
@@ -1505,16 +1560,7 @@ export class ConnectorService {
         normalizedStatuses.length > 0
           ? `Found ${normalizedStatuses.length} ${wantsOpenItems(effectiveFilters, rawQuery) ? "open " : ""}HaloPSA tickets${resolvedCustomerName ? ` for ${resolvedCustomerName}` : ""}. Results are condensed to ticket id, summary, status, customer, priority, and latest update.`
           : `No ${wantsOpenItems(effectiveFilters, rawQuery) ? "open " : ""}HaloPSA tickets found${resolvedCustomerName ? ` for ${resolvedCustomerName}` : ""}.`,
-      data: normalizedStatuses.map(({ ticket, status }) => ({
-        id: pickNumber(ticket, ["id", "ticket_id", "TicketID"]),
-        summary: pickString(ticket, ["summary", "subject", "title"]) ?? "Untitled ticket",
-        status,
-        customer: pickString(ticket, ["client_name", "customer_name", "organisation_name"]),
-        priority: pickString(ticket, ["priority_name", "priority"]),
-        lastActionAt: pickString(ticket, ["last_action_date", "lastupdated", "dateupdated"]),
-        ...buildHaloOpenRuleFields(ticket, status),
-        raw: ticket
-      })),
+      data: normalizedStatuses.map(({ ticket, status }) => buildNormalizedHaloTicket(ticket, status)),
       source: "halopsa"
     };
   }
@@ -3313,12 +3359,7 @@ export class ConnectorService {
       summary: `Loaded HaloPSA ticket ${id}. Result includes the ticket summary, status, customer, priority, and raw Halo details.`,
       data: [
         {
-          id: pickNumber(ticket, ["id", "ticket_id", "TicketID"]),
-          summary: pickString(ticket, ["summary", "subject", "title"]),
-          status: resolvedStatus,
-          customer: pickString(ticket, ["client_name", "customer_name", "organisation_name"]),
-          priority: pickString(ticket, ["priority_name", "priority"]),
-          ...buildHaloOpenRuleFields(ticket, resolvedStatus),
+          ...buildNormalizedHaloTicket(ticket, resolvedStatus),
           details: ticket
         }
       ],
