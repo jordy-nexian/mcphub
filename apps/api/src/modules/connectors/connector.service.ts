@@ -1588,9 +1588,19 @@ export class ConnectorService {
             ? true
             : !wantsOpenItems(input, rawQuery);
 
-    // Resolve query terms to Halo category IDs for server-side filtering
-    const resolvedCategoryIds = query
-      ? await this.resolveHaloCategoryIds(baseUrl, accessToken, query)
+    // Resolve query terms to Halo category IDs for server-side filtering.
+    // Strip out customer names first so they don't pollute category matching.
+    const categoryQuery = query
+      ? matchedCustomerNames
+          .reduce(
+            (q, name) => q.replace(new RegExp(name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi"), " "),
+            query
+          )
+          .replace(/\s+/g, " ")
+          .trim()
+      : "";
+    const resolvedCategoryIds = categoryQuery
+      ? await this.resolveHaloCategoryIds(baseUrl, accessToken, categoryQuery)
       : [];
     if (resolvedCategoryIds.length > 0 && !effectiveFilters.category_1) {
       effectiveFilters.category_1 = resolvedCategoryIds;
@@ -2020,8 +2030,11 @@ export class ConnectorService {
       return [];
     }
 
-    const normalizedQuery = query.toLowerCase();
-    const queryWords = normalizedQuery.split(/\s+/).filter((word) => word.length >= 2);
+    const normalizedQuery = query.toLowerCase().trim();
+    const queryWords = normalizedQuery.split(/\s+/).filter((word) => word.length >= 3);
+    if (queryWords.length === 0) {
+      return [];
+    }
 
     const matchedIds: number[] = [];
     for (const category of categories) {
@@ -2035,13 +2048,22 @@ export class ConnectorService {
         continue;
       }
 
-      // Match if the full query matches the category name or any query word matches
-      if (
-        textMatches(categoryName, normalizedQuery) ||
-        queryWords.some((word) => textMatches(categoryName, word))
-      ) {
+      // Require a strong match: either the full query equals the category name,
+      // or a query word matches the category name as a whole-word boundary
+      const isExactMatch = categoryName === normalizedQuery;
+      const hasWordBoundaryMatch = queryWords.some((word) => {
+        const pattern = new RegExp(`\\b${word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i");
+        return pattern.test(categoryName);
+      });
+
+      if (isExactMatch || hasWordBoundaryMatch) {
         matchedIds.push(categoryId);
       }
+    }
+
+    // If too many categories matched the query is too broad — skip category filtering
+    if (matchedIds.length > 10) {
+      return [];
     }
 
     return matchedIds;
