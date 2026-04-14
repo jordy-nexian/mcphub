@@ -396,6 +396,40 @@ function extractMeaningfulQuery(query: string | undefined, noisePatterns: RegExp
   return normalizeWhitespace(normalized);
 }
 
+function formatHaloDate(value: Date) {
+  const year = value.getFullYear();
+  const month = String(value.getMonth() + 1).padStart(2, "0");
+  const day = String(value.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function extractNaturalHaloDateFilters(query: string | undefined) {
+  if (!query) {
+    return {};
+  }
+
+  const normalized = query.toLowerCase();
+  const now = new Date();
+
+  if (/\b(ytd|year to date|start of (the )?year|since january|since jan(?:uary)? 1(st)?)\b/.test(normalized)) {
+    return {
+      datesearch: "dateoccured",
+      startdate: formatHaloDate(new Date(now.getFullYear(), 0, 1)),
+      enddate: formatHaloDate(now)
+    };
+  }
+
+  if (/\b(this month|current month|month to date|mtd)\b/.test(normalized)) {
+    return {
+      datesearch: "dateoccured",
+      startdate: formatHaloDate(new Date(now.getFullYear(), now.getMonth(), 1)),
+      enddate: formatHaloDate(now)
+    };
+  }
+
+  return {};
+}
+
 function isNinjaUnauthorizedError(error: unknown) {
   if (!(error instanceof Error)) {
     return false;
@@ -1293,20 +1327,26 @@ export class ConnectorService {
   private async listOpenHaloTickets(baseUrl: string, accessToken: string, input: Record<string, unknown>) {
     const rawQuery = typeof input.query === "string" ? input.query.trim() : undefined;
     const asksForProjects = /\b(project|projects|project ticket|project work|release|implementation)\b/i.test(rawQuery ?? "");
+    const naturalDateFilters = extractNaturalHaloDateFilters(rawQuery);
     const query = extractMeaningfulQuery(rawQuery, [
       /\bopen\b/g,
       /\brecent\b/g,
       /\btickets?\b/g,
       /\bincidents?\b/g,
       /\brequests?\b/g,
-      /\bfor\b/g
+      /\bfor\b/g,
+      /\b(ytd|year to date|start of (the )?year|since january|since jan(?:uary)? 1(st)?|this month|current month|month to date|mtd)\b/g
     ]);
+    const effectiveFilters: Record<string, unknown> = {
+      ...naturalDateFilters,
+      ...input
+    };
     const explicitClientId =
-      pickNumber(input, ["clientId", "client_id"]) ??
-      pickNumber(input, ["customerId", "customer_id"]) ??
-      pickNumber(input, ["organisationId", "organisation_id"]);
-    const structuredOpenOnly = typeof input.open_only === "boolean" ? input.open_only : undefined;
-    const structuredClosedOnly = typeof input.closed_only === "boolean" ? input.closed_only : undefined;
+      pickNumber(effectiveFilters, ["clientId", "client_id"]) ??
+      pickNumber(effectiveFilters, ["customerId", "customer_id"]) ??
+      pickNumber(effectiveFilters, ["organisationId", "organisation_id"]);
+    const structuredOpenOnly = typeof effectiveFilters.open_only === "boolean" ? effectiveFilters.open_only : undefined;
+    const structuredClosedOnly = typeof effectiveFilters.closed_only === "boolean" ? effectiveFilters.closed_only : undefined;
 
     let clientId = explicitClientId;
     let resolvedCustomerName: string | undefined;
@@ -1336,8 +1376,8 @@ export class ConnectorService {
     }
 
     const requestedLimit =
-      pickNumber(input, ["limit", "count", "top"]) ??
-      (typeof input.query === "string" && /\b(all)\b/i.test(input.query) ? 250 : 100);
+      pickNumber(effectiveFilters, ["limit", "count", "top"]) ??
+      (typeof rawQuery === "string" && /\b(all)\b/i.test(rawQuery) ? 250 : 100);
     const limit = Math.max(1, Math.min(requestedLimit, 100));
     const includeClosed =
       structuredClosedOnly === true
@@ -1354,7 +1394,7 @@ export class ConnectorService {
               query,
               includeClosed,
               limit,
-              filters: input
+              filters: effectiveFilters
             })
           )
         : []),
@@ -1364,7 +1404,7 @@ export class ConnectorService {
               query: alias,
               includeClosed,
               limit,
-              filters: input
+              filters: effectiveFilters
             })
           )
         : matchedClientIds.length === 0
@@ -1374,7 +1414,7 @@ export class ConnectorService {
                 query,
                 includeClosed,
                 limit,
-                filters: input
+                filters: effectiveFilters
               })
             ]
           : [])
@@ -1386,7 +1426,7 @@ export class ConnectorService {
         if (structuredClosedOnly === true) {
           return !isTicketOpen(ticket);
         }
-        if (structuredOpenOnly === true || wantsOpenItems(input, rawQuery)) {
+        if (structuredOpenOnly === true || wantsOpenItems(effectiveFilters, rawQuery)) {
           return isTicketOpen(ticket);
         }
         return true;
@@ -1433,8 +1473,8 @@ export class ConnectorService {
     return {
       summary:
         normalizedStatuses.length > 0
-          ? `Found ${normalizedStatuses.length} ${wantsOpenItems(input, rawQuery) ? "open " : ""}HaloPSA tickets${resolvedCustomerName ? ` for ${resolvedCustomerName}` : ""}. Results are condensed to ticket id, summary, status, customer, priority, and latest update.`
-          : `No ${wantsOpenItems(input, rawQuery) ? "open " : ""}HaloPSA tickets found${resolvedCustomerName ? ` for ${resolvedCustomerName}` : ""}.`,
+          ? `Found ${normalizedStatuses.length} ${wantsOpenItems(effectiveFilters, rawQuery) ? "open " : ""}HaloPSA tickets${resolvedCustomerName ? ` for ${resolvedCustomerName}` : ""}. Results are condensed to ticket id, summary, status, customer, priority, and latest update.`
+          : `No ${wantsOpenItems(effectiveFilters, rawQuery) ? "open " : ""}HaloPSA tickets found${resolvedCustomerName ? ` for ${resolvedCustomerName}` : ""}.`,
       data: normalizedStatuses.map(({ ticket, status }) => ({
         id: pickNumber(ticket, ["id", "ticket_id", "TicketID"]),
         summary: pickString(ticket, ["summary", "subject", "title"]) ?? "Untitled ticket",
