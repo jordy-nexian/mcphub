@@ -28,6 +28,14 @@ export const ninjaOneAdapter: ProviderAdapter = {
         "get_rmm_device_activities",
         "List recent NinjaOne device activities such as checks, automation runs, patches, and operational changes."
       ),
+      createStubTool(
+        "list_rmm_organizations",
+        "List or search NinjaOne organizations so AI clients can resolve customer or site context before querying devices."
+      ),
+      createStubTool(
+        "get_rmm_organization",
+        "Get a single NinjaOne organization by id so AI clients can inspect organization details before loading managed devices."
+      ),
       createStubTool("list_rmm_devices_for_site", "List managed endpoints and device health for a NinjaOne organization or site."),
       createStubTool("search_rmm_documents", "Search runbooks, scripts, and supporting notes exposed through NinjaOne."),
       createStubTool("find_rmm_contact", "Find technician or customer contact information linked to NinjaOne records.")

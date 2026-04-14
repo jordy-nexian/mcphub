@@ -1167,8 +1167,13 @@ export class ConnectorService {
 
       switch (toolName) {
         case "search_rmm_devices":
-        case "list_rmm_devices_for_site":
           return this.searchNinjaOneDevices(tenantId, userId, baseUrl, accessToken, input);
+        case "list_rmm_organizations":
+          return this.listNinjaOneOrganizations(baseUrl, accessToken, input);
+        case "get_rmm_organization":
+          return this.getNinjaOneOrganization(baseUrl, accessToken, input);
+        case "list_rmm_devices_for_site":
+          return this.listNinjaOneDevicesForOrganization(baseUrl, accessToken, input);
         case "get_user_devices":
           return this.getUserDevicesViaHaloAssets(tenantId, userId, baseUrl, accessToken, input);
         case "get_rmm_device_overview":
@@ -2092,6 +2097,8 @@ export class ConnectorService {
       "results",
       "items",
       "devices",
+      "organizations",
+      "organisations",
       "data",
       "alerts",
       "activities"
@@ -2201,6 +2208,113 @@ export class ConnectorService {
       organizationId: options.organizationId,
       limit
     });
+  }
+
+  private async listNinjaOneOrganizations(baseUrl: string, accessToken: string, input: Record<string, unknown>) {
+    const query = typeof input.query === "string" ? input.query.trim() : "";
+    const limitValue =
+      typeof input.limit === "number" ? input.limit : typeof input.limit === "string" ? Number(input.limit) : 100;
+    const limit = Number.isFinite(limitValue) ? Math.min(Math.max(limitValue, 1), 250) : 100;
+
+    const payload = await this.fetchNinjaOneJsonWithFallback(baseUrl, accessToken, ["/organizations"], {
+      limit
+    });
+    const organizations = this.normalizeNinjaOneCollection(payload);
+    const filteredOrganizations = query
+      ? organizations.filter((organization) =>
+          [
+            pickString(organization, ["name", "organizationName", "organisationName", "nodeClass"]),
+            pickString(organization, ["description", "displayName"])
+          ].some((value) => textMatches(value, query))
+        )
+      : organizations;
+
+    return {
+      summary:
+        filteredOrganizations.length > 0
+          ? `Found ${filteredOrganizations.length} NinjaOne organizations${query ? ` matching ${query}` : ""}. Results include organization id, name, description, and raw context where available.`
+          : query
+            ? `No NinjaOne organizations matched ${query}.`
+            : "No NinjaOne organizations found.",
+      data: filteredOrganizations.slice(0, limit).map((organization) => ({
+        id: pickNumber(organization, ["id", "organizationId", "organisationId"]),
+        name: pickString(organization, ["name", "organizationName", "organisationName"]),
+        description: pickString(organization, ["description", "displayName", "nodeClass"]),
+        parentId: pickNumber(organization, ["parentId", "parentOrganizationId"]),
+        raw: organization
+      })),
+      source: "ninjaone"
+    };
+  }
+
+  private async getNinjaOneOrganization(baseUrl: string, accessToken: string, input: Record<string, unknown>) {
+    const rawId = input.id ?? input.organizationId ?? input.organisationId ?? input.organization_id ?? input.organisation_id;
+    const organizationId =
+      typeof rawId === "number" || typeof rawId === "string" ? String(rawId).trim() : "";
+
+    if (!organizationId) {
+      throw new Error("get_rmm_organization requires an organization id");
+    }
+
+    const payload = (await this.fetchNinjaOneJsonWithFallback(baseUrl, accessToken, [
+      `/organization/${organizationId}`,
+      `/organizations/${organizationId}`
+    ])) as Record<string, unknown>;
+
+    return {
+      summary: `Loaded NinjaOne organization ${pickString(payload, ["name", "organizationName", "organisationName"]) ?? organizationId}.`,
+      data: [
+        {
+          id: pickNumber(payload, ["id", "organizationId", "organisationId"]),
+          name: pickString(payload, ["name", "organizationName", "organisationName"]),
+          description: pickString(payload, ["description", "displayName", "nodeClass"]),
+          parentId: pickNumber(payload, ["parentId", "parentOrganizationId"]),
+          raw: payload
+        }
+      ],
+      source: "ninjaone"
+    };
+  }
+
+  private async listNinjaOneDevicesForOrganization(baseUrl: string, accessToken: string, input: Record<string, unknown>) {
+    const rawId = input.id ?? input.organizationId ?? input.organisationId ?? input.organization_id ?? input.organisation_id;
+    let organizationId =
+      typeof rawId === "number" || typeof rawId === "string" ? String(rawId).trim() : "";
+
+    if (!organizationId) {
+      const query = typeof input.query === "string" ? input.query.trim() : "";
+      if (!query) {
+        throw new Error("list_rmm_devices_for_site requires an organization id or search query");
+      }
+
+      const organizations = await this.listNinjaOneOrganizations(baseUrl, accessToken, { query, limit: 25 });
+      const first = organizations.data[0];
+      organizationId =
+        typeof first?.id === "number" || typeof first?.id === "string" ? String(first.id).trim() : "";
+
+      if (!organizationId) {
+        return {
+          summary: `No NinjaOne organization matched ${query}.`,
+          data: [],
+          source: "ninjaone"
+        };
+      }
+    }
+
+    const payload = await this.fetchNinjaOneJsonWithFallback(baseUrl, accessToken, [
+      `/organization/${organizationId}/devices`,
+      `/organizations/${organizationId}/devices`
+    ]);
+    const devices = this.normalizeNinjaOneCollection(payload).slice(0, 100);
+
+    return {
+      summary:
+        devices.length > 0
+          ? `Found ${devices.length} NinjaOne devices for organization ${organizationId}.`
+          : `No NinjaOne devices found for organization ${organizationId}.`,
+      data: devices.map((device) => this.mapNinjaOneDevice(device)),
+      source: "ninjaone"
+    };
   }
 
   private pickDeviceId(input: Record<string, unknown>) {
