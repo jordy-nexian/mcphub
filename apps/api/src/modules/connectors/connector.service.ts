@@ -390,7 +390,7 @@ function extractMeaningfulQuery(query: string | undefined, noisePatterns: RegExp
   }
 
   normalized = normalized
-    .replace(/\b(show|find|get|list|give me|tell me|search|lookup|for me|please)\b/g, " ")
+    .replace(/\b(show|find|get|list|give me|tell me|search|lookup|for me|please|all|since|from)\b/g, " ")
     .replace(/[?.,]+/g, " ");
 
   return normalizeWhitespace(normalized);
@@ -469,6 +469,25 @@ function isProjectOpen(record: HaloGenericRecord) {
   return !["closed", "completed", "cancelled", "canceled", "resolved", "archived"].some((keyword) =>
     statusName.includes(keyword)
   );
+}
+
+function ticketMatchesHaloQuery(ticket: HaloTicketRecord, query: string) {
+  const normalizedQuery = normalizeWhitespace(query).toLowerCase();
+  if (!normalizedQuery) {
+    return true;
+  }
+
+  return [
+    pickString(ticket, ["summary", "subject", "title"]),
+    pickString(ticket, ["details", "description", "body"]),
+    pickString(ticket, ["category_1_name", "category1_name", "category_1", "category1"]),
+    pickString(ticket, ["category_2_name", "category2_name", "category_2", "category2"]),
+    pickString(ticket, ["category_3_name", "category3_name", "category_3", "category3"]),
+    pickString(ticket, ["category_4_name", "category4_name", "category_4", "category4"]),
+    pickString(ticket, ["requesttype_name", "request_type", "requesttype"]),
+    pickString(ticket, ["client_name", "customer_name", "organisation_name"]),
+    pickString(ticket, ["site_name", "location_name"])
+  ].some((value) => textMatches(value, normalizedQuery));
 }
 
 function normalizeIdentityToken(value: string) {
@@ -1341,6 +1360,10 @@ export class ConnectorService {
       ...naturalDateFilters,
       ...input
     };
+    const hasNaturalDateFilter =
+      typeof naturalDateFilters.startdate === "string" ||
+      typeof naturalDateFilters.enddate === "string" ||
+      typeof naturalDateFilters.datesearch === "string";
     const explicitClientId =
       pickNumber(effectiveFilters, ["clientId", "client_id"]) ??
       pickNumber(effectiveFilters, ["customerId", "customer_id"]) ??
@@ -1391,7 +1414,7 @@ export class ConnectorService {
         ? matchedClientIds.map((matchedId) =>
             this.fetchHaloTickets(baseUrl, accessToken, {
               clientId: matchedId,
-              query,
+              query: hasNaturalDateFilter ? undefined : query,
               includeClosed,
               limit,
               filters: effectiveFilters
@@ -1401,7 +1424,7 @@ export class ConnectorService {
       ...(searchAliases.length > 0
         ? searchAliases.map((alias) =>
             this.fetchHaloTickets(baseUrl, accessToken, {
-              query: alias,
+              query: hasNaturalDateFilter ? undefined : alias,
               includeClosed,
               limit,
               filters: effectiveFilters
@@ -1411,7 +1434,7 @@ export class ConnectorService {
           ? [
               this.fetchHaloTickets(baseUrl, accessToken, {
                 clientId,
-                query,
+                query: hasNaturalDateFilter ? undefined : query,
                 includeClosed,
                 limit,
                 filters: effectiveFilters
@@ -1430,6 +1453,13 @@ export class ConnectorService {
           return isTicketOpen(ticket);
         }
         return true;
+      })
+      .filter((ticket) => {
+        if (!query || !hasNaturalDateFilter) {
+          return true;
+        }
+
+        return ticketMatchesHaloQuery(ticket, query);
       })
       .filter((ticket) => {
         if (matchedClientIds.length === 0) {
