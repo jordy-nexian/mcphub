@@ -1618,10 +1618,15 @@ export class ConnectorService {
           .trim()
       : query;
 
-    // Resolve topic terms to Halo category IDs for server-side filtering.
-    const resolvedCategoryIds = topicQuery
-      ? await this.resolveHaloCategoryIds(baseUrl, accessToken, topicQuery)
-      : [];
+    // Resolve topic terms to Halo category IDs (grouped by tier) for server-side filtering.
+    const resolvedCategories = topicQuery
+      ? await this.resolveHaloCategoryFilters(baseUrl, accessToken, topicQuery)
+      : {};
+    const hasResolvedCategories =
+      Boolean(resolvedCategories.category_1?.length) ||
+      Boolean(resolvedCategories.category_2?.length) ||
+      Boolean(resolvedCategories.category_3?.length) ||
+      Boolean(resolvedCategories.category_4?.length);
 
     // Build filters for the API — strip any AI-supplied count/page_size/limit
     // so our comprehensive limit is respected.
@@ -1633,11 +1638,25 @@ export class ConnectorService {
       delete apiFilters.top;
     }
 
-    // Fetch strategy: separate calls for different filter combinations,
-    // then merge and deduplicate. Category IDs are used in a separate
-    // fetch so they don't AND with text search and over-filter results.
+    // Build a category-enriched filter set (applies each tier to its correct param)
+    const categoryFilters = { ...apiFilters };
+    if (resolvedCategories.category_1?.length && !categoryFilters.category_1) {
+      categoryFilters.category_1 = resolvedCategories.category_1;
+    }
+    if (resolvedCategories.category_2?.length && !categoryFilters.category_2) {
+      categoryFilters.category_2 = resolvedCategories.category_2;
+    }
+    if (resolvedCategories.category_3?.length && !categoryFilters.category_3) {
+      categoryFilters.category_3 = resolvedCategories.category_3;
+    }
+    if (resolvedCategories.category_4?.length && !categoryFilters.category_4) {
+      categoryFilters.category_4 = resolvedCategories.category_4;
+    }
+
+    // Fetch strategy: separate calls for text search vs category filter,
+    // then merge and deduplicate. This OR approach avoids over-filtering.
     const fetchedTicketGroups = await Promise.all([
-      // Primary fetch: by client + topic search + date filters
+      // Primary fetch: by client + topic text search + date filters
       ...(matchedClientIds.length > 0
         ? matchedClientIds.map((matchedId) =>
             this.fetchHaloTickets(baseUrl, accessToken, {
@@ -1649,19 +1668,19 @@ export class ConnectorService {
             })
           )
         : []),
-      // If category IDs resolved, fetch by client + category (no text search)
-      // so we also find tickets where the topic is only in the category, not summary
-      ...(resolvedCategoryIds.length > 0 && matchedClientIds.length > 0
+      // Category fetch: by client + resolved category tier filters (no text search)
+      // catches tickets where the topic is in the category path, not the summary
+      ...(hasResolvedCategories && matchedClientIds.length > 0
         ? matchedClientIds.map((matchedId) =>
             this.fetchHaloTickets(baseUrl, accessToken, {
               clientId: matchedId,
               includeClosed,
               limit,
-              filters: { ...apiFilters, category_1: resolvedCategoryIds }
+              filters: categoryFilters
             })
           )
         : []),
-      // No customer matched — fall back to text search or category search
+      // No customer matched — fall back to text search + category combined
       ...(matchedClientIds.length === 0
         ? [
             this.fetchHaloTickets(baseUrl, accessToken, {
@@ -1669,9 +1688,7 @@ export class ConnectorService {
               query: topicQuery || undefined,
               includeClosed,
               limit,
-              filters: resolvedCategoryIds.length > 0
-                ? { ...apiFilters, category_1: resolvedCategoryIds }
-                : apiFilters
+              filters: hasResolvedCategories ? categoryFilters : apiFilters
             })
           ]
         : [])
@@ -1752,7 +1769,7 @@ export class ConnectorService {
     const dateLabel = hasNaturalDateFilter
       ? ` (date range: ${naturalDateFilters.startdate} to ${naturalDateFilters.enddate})`
       : "";
-    const categoryLabel = resolvedCategoryIds.length > 0
+    const categoryLabel = hasResolvedCategories
       ? ` matching category filter`
       : "";
 
@@ -2022,7 +2039,6 @@ export class ConnectorService {
     for (const path of ["/api/Category", "/api/category", "/api/categories"]) {
       const url = new URL(`${baseUrl}${path}`);
       url.searchParams.set("count", "500");
-      url.searchParams.set("type", "0");
 
       const response = await haloFetch(url, {
         headers: buildHaloHeaders(accessToken)
@@ -2043,23 +2059,31 @@ export class ConnectorService {
     return [];
   }
 
-  private async resolveHaloCategoryIds(baseUrl: string, accessToken: string, query: string): Promise<number[]> {
+  private async resolveHaloCategoryFilters(
+    baseUrl: string,
+    accessToken: string,
+    query: string
+  ): Promise<{ category_1?: number[]; category_2?: number[]; category_3?: number[]; category_4?: number[] }> {
     if (!query.trim()) {
-      return [];
+      return {};
     }
 
     const categories = await this.fetchHaloCategories(baseUrl, accessToken);
     if (categories.length === 0) {
-      return [];
+      return {};
     }
 
     const normalizedQuery = query.toLowerCase().trim();
     const queryWords = normalizedQuery.split(/\s+/).filter((word) => word.length >= 3);
     if (queryWords.length === 0) {
-      return [];
+      return {};
     }
 
-    const matchedIds: number[] = [];
+    // type_id on each category record maps to the tier:
+    // 0 → category_1, 1 → category_2, 2 → category_3, 3 → category_4
+    const tierMap: Record<number, string> = { 0: "category_1", 1: "category_2", 2: "category_3", 3: "category_4" };
+    const buckets: Record<string, number[]> = {};
+
     for (const category of categories) {
       const categoryName = pickString(category, ["name", "value", "label", "text", "category_name"])?.toLowerCase();
       if (!categoryName) {
@@ -2071,8 +2095,13 @@ export class ConnectorService {
         continue;
       }
 
-      // Require a strong match: either the full query equals the category name,
-      // or a query word matches the category name as a whole-word boundary
+      // Determine which tier this category belongs to
+      const typeId = pickNumber(category, ["type_id", "typeid", "type"]);
+      const tierKey = typeof typeId === "number" && tierMap[typeId]
+        ? tierMap[typeId]
+        : "category_1"; // default to tier 1 if type_id is missing
+
+      // Require a strong match: exact name match or whole-word boundary match
       const isExactMatch = categoryName === normalizedQuery;
       const hasWordBoundaryMatch = queryWords.some((word) => {
         const pattern = new RegExp(`\\b${word.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "i");
@@ -2080,16 +2109,25 @@ export class ConnectorService {
       });
 
       if (isExactMatch || hasWordBoundaryMatch) {
-        matchedIds.push(categoryId);
+        if (!buckets[tierKey]) {
+          buckets[tierKey] = [];
+        }
+        buckets[tierKey].push(categoryId);
       }
     }
 
-    // If too many categories matched the query is too broad — skip category filtering
-    if (matchedIds.length > 10) {
-      return [];
+    // If any single tier has too many matches the query is too broad for that tier — drop it
+    for (const key of Object.keys(buckets)) {
+      if (buckets[key].length > 10) {
+        delete buckets[key];
+      }
     }
 
-    return matchedIds;
+    if (Object.keys(buckets).length === 0) {
+      return {};
+    }
+
+    return buckets as { category_1?: number[]; category_2?: number[]; category_3?: number[]; category_4?: number[] };
   }
 
   private async resolveHaloEntityHints(tenantId: string, userId: string, query: string): Promise<ResolvedEntityHints> {
