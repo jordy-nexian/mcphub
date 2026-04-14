@@ -1478,6 +1478,8 @@ export class ConnectorService {
         return this.searchHaloDocuments(baseUrl, accessToken, input);
       case "list_devices_for_site":
         return this.listHaloDevicesForSite(baseUrl, accessToken, input);
+      case "list_halo_categories":
+        return this.listHaloCategories(baseUrl, accessToken, input);
       case "get_recent_invoices":
         return this.getRecentHaloInvoices(baseUrl, accessToken, input);
       case "create_draft_ticket":
@@ -2057,6 +2059,101 @@ export class ConnectorService {
     }
 
     return [];
+  }
+
+  private async listHaloCategories(baseUrl: string, accessToken: string, input: Record<string, unknown>) {
+    const query = typeof input.query === "string" ? input.query.trim().toLowerCase() : "";
+    const categories = await this.fetchHaloCategories(baseUrl, accessToken);
+
+    if (categories.length === 0) {
+      return {
+        summary: "No HaloPSA categories found. The category API may not be accessible.",
+        data: [],
+        source: "halopsa"
+      };
+    }
+
+    const tierMap: Record<number, { tier: number; label: string; filterParam: string }> = {
+      0: { tier: 1, label: "Category 1 (Top-level)", filterParam: "category_1" },
+      1: { tier: 2, label: "Category 2 (Sub-category)", filterParam: "category_2" },
+      2: { tier: 3, label: "Category 3", filterParam: "category_3" },
+      3: { tier: 4, label: "Category 4", filterParam: "category_4" }
+    };
+
+    // Build a lookup map of id → name for resolving parent references
+    const idToName = new Map<number, string>();
+    for (const cat of categories) {
+      const id = pickNumber(cat, ["id", "category_id"]);
+      const name = pickString(cat, ["name", "value", "label", "text", "category_name"]);
+      if (typeof id === "number" && name) {
+        idToName.set(id, name);
+      }
+    }
+
+    // Normalize and optionally filter categories
+    const normalized = categories
+      .map((cat) => {
+        const id = pickNumber(cat, ["id", "category_id"]);
+        const name = pickString(cat, ["name", "value", "label", "text", "category_name"]);
+        const typeId = pickNumber(cat, ["type_id", "typeid", "type"]);
+        const parentId = pickNumber(cat, ["category_group_id", "parent_id", "parentid"]);
+        const tierInfo = typeof typeId === "number" && tierMap[typeId]
+          ? tierMap[typeId]
+          : tierMap[0];
+
+        return {
+          id,
+          name: name ?? "(unnamed)",
+          tier: tierInfo.tier,
+          tierLabel: tierInfo.label,
+          filterParam: tierInfo.filterParam,
+          parentId: parentId ?? null,
+          parentName: typeof parentId === "number" ? (idToName.get(parentId) ?? null) : null
+        };
+      })
+      .filter((entry): entry is typeof entry & { id: number } => typeof entry.id === "number")
+      .filter((entry) => {
+        if (!query) {
+          return true;
+        }
+        return entry.name.toLowerCase().includes(query);
+      });
+
+    // Group by tier, sort alphabetically within each tier
+    const grouped: Record<number, typeof normalized> = {};
+    for (const entry of normalized) {
+      if (!grouped[entry.tier]) {
+        grouped[entry.tier] = [];
+      }
+      grouped[entry.tier].push(entry);
+    }
+    for (const tier of Object.values(grouped)) {
+      tier.sort((a, b) => a.name.localeCompare(b.name));
+    }
+
+    // Flatten back ordered by tier then name
+    const results = [1, 2, 3, 4].flatMap((tier) => grouped[tier] ?? []);
+
+    const tierCounts = [1, 2, 3, 4]
+      .map((tier) => `tier ${tier}: ${(grouped[tier] ?? []).length}`)
+      .filter((s) => !s.endsWith(": 0"))
+      .join(", ");
+
+    return {
+      summary: query
+        ? `Found ${results.length} HaloPSA categories matching "${query}" (${tierCounts}). Use the id values in the corresponding category_1/2/3/4 filter arrays when calling list_open_tickets.`
+        : `Found ${results.length} HaloPSA categories across all tiers (${tierCounts}). Use the id values in the corresponding category_1/2/3/4 filter arrays when calling list_open_tickets.`,
+      data: results.map((entry) => ({
+        id: entry.id,
+        name: entry.name,
+        tier: entry.tier,
+        tierLabel: entry.tierLabel,
+        filterParam: entry.filterParam,
+        parentId: entry.parentId,
+        parentName: entry.parentName
+      })),
+      source: "halopsa"
+    };
   }
 
   private async resolveHaloCategoryFilters(

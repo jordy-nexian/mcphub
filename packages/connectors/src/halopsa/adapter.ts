@@ -86,7 +86,7 @@ const haloTicketFiltersSchema = z.object({
 const haloListOpenTicketsTool: ConnectorToolDefinition<z.infer<typeof haloTicketFiltersSchema>, NormalizedToolResponse> = {
   name: "list_open_tickets",
   description:
-    "Use when the user wants a queue-style view of active tickets, open incidents, or tickets for a customer. Also use for counting tickets, reporting on ticket volumes, or querying tickets by date range (e.g. 'last quarter', 'this month', 'last 30 days', 'Q1 2025', 'YTD'). Supports natural language date ranges, text search across summaries and categories, client_id, site, status arrays, category filters, pagination, ordering, and search fields. For counting or historical queries, pass the full natural language question as the query parameter.",
+    "Use when the user wants a queue-style view of active tickets, open incidents, or tickets for a customer. Also use for counting tickets, reporting on ticket volumes, or querying tickets by date range (e.g. 'last quarter', 'this month', 'last 30 days', 'Q1 2025', 'YTD'). Supports natural language date ranges, text search across summaries and categories, client_id, site, status arrays, category filters (category_1 through category_4 as numeric ID arrays — call list_halo_categories first to discover category IDs), pagination, ordering, and search fields. For counting or historical queries, pass the full natural language question as the query parameter.",
   inputSchema: haloTicketFiltersSchema,
   async execute(context, input) {
     return {
@@ -227,6 +227,10 @@ export const haloPsaAdapter: ProviderAdapter = {
       createStubTool(
         "list_devices_for_site",
         "Use when the user asks what devices, assets, or inventory items are recorded for a HaloPSA site or location."
+      ),
+      createStubTool(
+        "list_halo_categories",
+        "Use when the user wants to discover HaloPSA ticket categories, look up category IDs for filtering, or understand the category hierarchy. Returns all 4 tiers with numeric IDs, names, and parent relationships. Call this before list_open_tickets when filtering by category."
       ),
       createStubTool(
         "get_recent_invoices",
