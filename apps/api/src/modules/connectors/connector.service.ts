@@ -1551,25 +1551,46 @@ export class ConnectorService {
     let matchedCustomerNames: string[] = [];
 
     if (!clientId && query) {
-      const customerLookup = await this.lookupHaloCustomers(baseUrl, accessToken, query, 50);
-      const matchingCustomers = customerLookup.filter((customer) =>
-        [
-          pickString(customer, ["name", "client_name"]),
-          pickString(customer, ["reference", "client_reference", "ref"]),
-          pickString(customer, ["organisation_name", "customer_name"])
-        ].some((candidate) => textMatches(candidate, query))
-      );
+      // Try the full query first, then try each individual word so that
+      // "sftp cmutual" still resolves "CMutual" as a customer even though
+      // "sftp" is a topic word, not a customer name.
+      const searchTerms = [query, ...query.split(/\s+/).filter((word) => word.length >= 3)];
+      const seen = new Set<number>();
 
-      const selectedCustomers = matchingCustomers.length > 0 ? matchingCustomers : customerLookup.slice(0, 1);
-      matchedClientIds = selectedCustomers
-        .map((customer) => pickNumber(customer, ["id", "client_id"]))
-        .filter((value): value is number => typeof value === "number");
-      matchedCustomerNames = selectedCustomers
-        .map((customer) => pickString(customer, ["name", "client_name", "organisation_name", "customer_name"]))
-        .filter((value): value is string => typeof value === "string");
+      for (const term of searchTerms) {
+        if (matchedClientIds.length > 0) {
+          break;
+        }
 
-      clientId = matchedClientIds[0];
-      resolvedCustomerName = matchedCustomerNames[0];
+        const customerLookup = await this.lookupHaloCustomers(baseUrl, accessToken, term, 25);
+        const matchingCustomers = customerLookup.filter((customer) => {
+          const id = pickNumber(customer, ["id", "client_id"]);
+          if (id && seen.has(id)) {
+            return false;
+          }
+          if (id) {
+            seen.add(id);
+          }
+
+          return [
+            pickString(customer, ["name", "client_name"]),
+            pickString(customer, ["reference", "client_reference", "ref"]),
+            pickString(customer, ["organisation_name", "customer_name"])
+          ].some((candidate) => textMatches(candidate, term));
+        });
+
+        if (matchingCustomers.length > 0) {
+          matchedClientIds = matchingCustomers
+            .map((customer) => pickNumber(customer, ["id", "client_id"]))
+            .filter((value): value is number => typeof value === "number");
+          matchedCustomerNames = matchingCustomers
+            .map((customer) => pickString(customer, ["name", "client_name", "organisation_name", "customer_name"]))
+            .filter((value): value is string => typeof value === "string");
+
+          clientId = matchedClientIds[0];
+          resolvedCustomerName = matchedCustomerNames[0];
+        }
+      }
     }
 
     const isCountingQuery = /\b(how many|count|number of|total|tally)\b/i.test(rawQuery ?? "");
