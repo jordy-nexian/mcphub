@@ -1546,11 +1546,16 @@ export class ConnectorService {
       pickNumber(effectiveFilters, ["organisationId", "organisation_id"]);
     const structuredOpenOnly = typeof effectiveFilters.open_only === "boolean" ? effectiveFilters.open_only : undefined;
     const structuredClosedOnly = typeof effectiveFilters.closed_only === "boolean" ? effectiveFilters.closed_only : undefined;
+    const explicitUserId = pickNumber(effectiveFilters, ["user_id", "userId"]);
+    const explicitUsername = pickString(effectiveFilters, ["username"]);
 
     let clientId = explicitClientId;
     let resolvedCustomerName: string | undefined;
     let matchedClientIds: number[] = explicitClientId ? [explicitClientId] : [];
     let matchedCustomerNames: string[] = [];
+    let resolvedUserName: string | undefined;
+    let matchedUserIds: number[] = explicitUserId ? [explicitUserId] : [];
+    let matchedUserNames: string[] = explicitUsername ? [explicitUsername] : [];
 
     if (!clientId && query) {
       // Try the full query first, then try each individual word so that
@@ -1620,9 +1625,56 @@ export class ConnectorService {
           .trim()
       : query;
 
+    if ((matchedUserIds.length === 0 && matchedUserNames.length === 0) && topicQuery) {
+      try {
+        const users = await this.lookupHaloUsers(baseUrl, accessToken, {
+          query: topicQuery,
+          client_id: clientId,
+          includeactive: true,
+          includeinactive: false,
+          count: 25
+        });
+        const matchingUsers = users.filter((user) =>
+          [
+            pickString(user, ["name", "display_name", "fullname", "full_name"]),
+            pickString(user, ["email", "emailaddress", "email_address"]),
+            pickString(user, ["username", "user_name"]),
+            pickString(user, ["client_name", "organisation_name", "site_name"])
+          ].some((candidate) => textMatches(candidate, topicQuery))
+        );
+
+        const selectedUsers = matchingUsers.length > 0 ? matchingUsers : [];
+        matchedUserIds = selectedUsers
+          .map((user) => pickNumber(user, ["id", "user_id", "contact_id"]))
+          .filter((value): value is number => typeof value === "number");
+        matchedUserNames = selectedUsers
+          .flatMap((user) =>
+            [
+              pickString(user, ["name", "display_name", "fullname", "full_name"]),
+              pickString(user, ["email", "emailaddress", "email_address"]),
+              pickString(user, ["username", "user_name"])
+            ].filter(Boolean)
+          )
+          .filter((value): value is string => typeof value === "string");
+        resolvedUserName = matchedUserNames[0];
+      } catch {
+        // Optional user enrichment only.
+      }
+    }
+
+    const refinedTopicQuery = matchedUserNames.length > 0
+      ? matchedUserNames
+          .reduce(
+            (q, name) => q.replace(new RegExp(name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi"), " "),
+            topicQuery
+          )
+          .replace(/\s+/g, " ")
+          .trim()
+      : topicQuery;
+
     // Resolve topic terms to Halo category IDs (grouped by tier) for server-side filtering.
-    const resolvedCategories = topicQuery
-      ? await this.resolveHaloCategoryFilters(baseUrl, accessToken, topicQuery)
+    const resolvedCategories = refinedTopicQuery
+      ? await this.resolveHaloCategoryFilters(baseUrl, accessToken, refinedTopicQuery)
       : {};
     const hasResolvedCategories =
       Boolean(resolvedCategories.category_1?.length) ||
@@ -1633,6 +1685,12 @@ export class ConnectorService {
     // Build filters for the API — strip any AI-supplied count/page_size/limit
     // so our comprehensive limit is respected.
     const apiFilters = { ...effectiveFilters };
+    if (matchedUserIds[0] !== undefined && apiFilters.user_id === undefined && apiFilters.userId === undefined) {
+      apiFilters.user_id = matchedUserIds[0];
+    }
+    if (matchedUserNames[0] && apiFilters.username === undefined) {
+      apiFilters.username = matchedUserNames[0];
+    }
     if (needsComprehensiveResults) {
       delete apiFilters.count;
       delete apiFilters.page_size;
@@ -1663,7 +1721,7 @@ export class ConnectorService {
         ? matchedClientIds.map((matchedId) =>
             this.fetchHaloTickets(baseUrl, accessToken, {
               clientId: matchedId,
-              query: topicQuery || undefined,
+              query: refinedTopicQuery || undefined,
               includeClosed,
               limit,
               filters: apiFilters
@@ -1685,12 +1743,12 @@ export class ConnectorService {
       // No customer matched — fall back to text search + category combined
       ...(matchedClientIds.length === 0
         ? [
-            this.fetchHaloTickets(baseUrl, accessToken, {
-              clientId,
-              query: topicQuery || undefined,
-              includeClosed,
-              limit,
-              filters: hasResolvedCategories ? categoryFilters : apiFilters
+              this.fetchHaloTickets(baseUrl, accessToken, {
+                clientId,
+                query: refinedTopicQuery || undefined,
+                includeClosed,
+                limit,
+                filters: hasResolvedCategories ? categoryFilters : apiFilters
             })
           ]
         : [])
@@ -1714,11 +1772,11 @@ export class ConnectorService {
         return true;
       })
       .filter((ticket) => {
-        if (!topicQuery) {
+        if (!refinedTopicQuery) {
           return true;
         }
 
-        return ticketMatchesHaloQuery(ticket, topicQuery);
+        return ticketMatchesHaloQuery(ticket, refinedTopicQuery);
       })
       .filter((ticket) => {
         if (matchedClientIds.length === 0) {
@@ -1778,8 +1836,8 @@ export class ConnectorService {
     return {
       summary:
         normalizedStatuses.length > 0
-          ? `Found ${normalizedStatuses.length} ${statusLabel}HaloPSA tickets${resolvedCustomerName ? ` for ${resolvedCustomerName}` : ""}${dateLabel}${categoryLabel}. Results are condensed to ticket id, summary, status, customer, priority, category path, and latest update.`
-          : `No ${statusLabel}HaloPSA tickets found${resolvedCustomerName ? ` for ${resolvedCustomerName}` : ""}${dateLabel}${categoryLabel}.`,
+          ? `Found ${normalizedStatuses.length} ${statusLabel}HaloPSA tickets${resolvedCustomerName ? ` for ${resolvedCustomerName}` : ""}${resolvedUserName ? `${resolvedCustomerName ? " and " : " for "}${resolvedUserName}` : ""}${dateLabel}${categoryLabel}. Results are condensed to ticket id, summary, status, customer, priority, category path, and latest update.`
+          : `No ${statusLabel}HaloPSA tickets found${resolvedCustomerName ? ` for ${resolvedCustomerName}` : ""}${resolvedUserName ? `${resolvedCustomerName ? " and " : " for "}${resolvedUserName}` : ""}${dateLabel}${categoryLabel}.`,
       data: normalizedStatuses.map(({ ticket, status }) => buildNormalizedHaloTicket(ticket, status)),
       source: "halopsa"
     };
@@ -1853,6 +1911,48 @@ export class ConnectorService {
 
     const payload = (await response.json()) as HaloClientRecord[] | { clients?: HaloClientRecord[] };
     return Array.isArray(payload) ? payload : (payload.clients ?? []);
+  }
+
+  private async lookupHaloUsers(baseUrl: string, accessToken: string, options: Record<string, unknown>) {
+    const url = new URL(`${baseUrl}/api/users`);
+    appendQueryValue(url, "paginate", typeof options.paginate === "boolean" ? options.paginate : undefined);
+    appendQueryValue(url, "page_size", pickNumber(options, ["page_size"]));
+    appendQueryValue(url, "page_no", pickNumber(options, ["page_no"]));
+    appendQueryValue(url, "order", pickString(options, ["order"]));
+    appendQueryValue(url, "orderdesc", typeof options.orderdesc === "boolean" ? options.orderdesc : undefined);
+    appendQueryValue(url, "search", pickString(options, ["search", "query"]));
+    appendQueryValue(
+      url,
+      "search_phonenumbers",
+      typeof options.search_phonenumbers === "boolean" ? options.search_phonenumbers : undefined
+    );
+    appendQueryValue(url, "toplevel_id", pickNumber(options, ["toplevel_id"]));
+    appendQueryValue(url, "client_id", pickNumber(options, ["client_id", "clientId"]));
+    appendQueryValue(url, "site_id", pickNumber(options, ["site_id", "siteId"]));
+    appendQueryValue(url, "organisation_id", pickNumber(options, ["organisation_id", "organisationId"]));
+    appendQueryValue(url, "department_id", pickNumber(options, ["department_id", "departmentId"]));
+    appendQueryValue(url, "asset_id", pickNumber(options, ["asset_id", "assetId"]));
+    appendQueryValue(url, "includeactive", typeof options.includeactive === "boolean" ? options.includeactive : options.includeActive);
+    appendQueryValue(
+      url,
+      "includeinactive",
+      typeof options.includeinactive === "boolean" ? options.includeinactive : options.includeInactive
+    );
+    appendQueryValue(url, "approversonly", typeof options.approversonly === "boolean" ? options.approversonly : undefined);
+    appendQueryValue(url, "excludeagents", typeof options.excludeagents === "boolean" ? options.excludeagents : undefined);
+    appendQueryValue(url, "count", pickNumber(options, ["count"]) ?? 25);
+
+    const response = await haloFetch(url, {
+      headers: buildHaloHeaders(accessToken)
+    });
+
+    if (!response.ok) {
+      const body = await response.text();
+      throw new Error(`HaloPSA users request failed (${response.status}): ${body}`);
+    }
+
+    const payload = (await response.json()) as unknown;
+    return normalizeCollectionPayload(payload, ["users", "contacts", "results", "data"]);
   }
 
   private async fetchHaloTickets(
@@ -2474,38 +2574,33 @@ export class ConnectorService {
   }
 
   private async findHaloContact(baseUrl: string, accessToken: string, input: Record<string, unknown>) {
-    const query = typeof input.query === "string" ? input.query.trim() : "";
-    if (!query) {
-      throw new Error("find_contact requires a query");
+    const query = typeof input.query === "string" ? input.query.trim() : pickString(input, ["search"]) ?? "";
+    if (!query && Object.keys(input).length === 0) {
+      throw new Error("find_contact requires a query or user filters");
     }
 
-    const url = new URL(`${baseUrl}/api/users`);
-    url.searchParams.set("count", "25");
-    url.searchParams.set("search", query);
-
-    const response = await haloFetch(url, {
-      headers: buildHaloHeaders(accessToken)
-    });
-
-    if (!response.ok) {
-      const body = await response.text();
-      throw new Error(`HaloPSA contacts request failed (${response.status}): ${body}`);
-    }
-
-    const payload = (await response.json()) as unknown;
-    const contacts = normalizeCollectionPayload(payload, ["users", "contacts"]).slice(0, 25);
+    const contacts = (await this.lookupHaloUsers(baseUrl, accessToken, {
+      ...input,
+      query,
+      count: pickNumber(input, ["count"]) ?? 25
+    })).slice(0, 25);
 
     return {
       summary:
         contacts.length > 0
-          ? `Found ${contacts.length} HaloPSA contacts. Results include contact id, name, email, phone, and associated customer or site where available.`
-          : "No HaloPSA contacts matched that query.",
+          ? `Found ${contacts.length} HaloPSA users. Results include user id, name, email, phone, customer, site, department, active status, and raw user details where available.`
+          : "No HaloPSA users matched that query.",
       data: contacts.map((contact) => ({
         id: pickNumber(contact, ["id", "user_id", "contact_id"]),
         name: pickString(contact, ["name", "display_name", "fullname", "full_name"]),
         email: pickString(contact, ["email", "emailaddress", "email_address"]),
-        phone: pickString(contact, ["phone", "mobilephone", "telephone"]),
-        customer: pickString(contact, ["client_name", "organisation_name", "site_name"]),
+        phone:
+          pickString(contact, ["phonenumber_preferred", "phone", "mobilephone", "telephone", "mobilenumber", "mobilenumber2"]),
+        customer: pickString(contact, ["client_name", "organisation_name"]),
+        site: pickString(contact, ["site_name"]),
+        department: pickString(contact, ["department_name", "department"]),
+        username: pickString(contact, ["username", "user_name", "samaccountname"]),
+        active: typeof contact.inactive === "boolean" ? !contact.inactive : undefined,
         raw: contact
       })),
       source: "halopsa"

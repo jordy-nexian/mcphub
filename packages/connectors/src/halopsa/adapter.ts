@@ -83,6 +83,35 @@ const haloTicketFiltersSchema = z.object({
   organisationId: z.number().int().optional()
 });
 
+const haloUserFiltersSchema = z.object({
+  query: z.string().optional(),
+  paginate: z.boolean().optional(),
+  page_size: z.number().int().positive().max(200).optional(),
+  page_no: z.number().int().positive().optional(),
+  order: z.string().optional(),
+  orderdesc: z.boolean().optional(),
+  search: z.string().optional(),
+  search_phonenumbers: z.boolean().optional(),
+  toplevel_id: z.number().int().optional(),
+  client_id: z.number().int().optional(),
+  site_id: z.number().int().optional(),
+  organisation_id: z.number().int().optional(),
+  department_id: z.number().int().optional(),
+  asset_id: z.number().int().optional(),
+  includeactive: z.boolean().optional(),
+  includeinactive: z.boolean().optional(),
+  approversonly: z.boolean().optional(),
+  excludeagents: z.boolean().optional(),
+  count: z.number().int().positive().max(250).optional(),
+  clientId: z.number().int().optional(),
+  siteId: z.number().int().optional(),
+  organisationId: z.number().int().optional(),
+  departmentId: z.number().int().optional(),
+  assetId: z.number().int().optional(),
+  includeActive: z.boolean().optional(),
+  includeInactive: z.boolean().optional()
+});
+
 const haloListOpenTicketsTool: ConnectorToolDefinition<z.infer<typeof haloTicketFiltersSchema>, NormalizedToolResponse> = {
   name: "list_open_tickets",
   description:
@@ -91,6 +120,27 @@ const haloListOpenTicketsTool: ConnectorToolDefinition<z.infer<typeof haloTicket
   async execute(context, input) {
     return {
       summary: `list_open_tickets is scaffolded for tenant ${context.tenantId}.`,
+      data: [
+        {
+          status: "not_implemented",
+          query: input.query ?? null,
+          filters: input,
+          accountId: context.accountId
+        }
+      ],
+      source: "connector-scaffold"
+    };
+  }
+};
+
+const haloFindContactTool: ConnectorToolDefinition<z.infer<typeof haloUserFiltersSchema>, NormalizedToolResponse> = {
+  name: "find_contact",
+  description:
+    "Use when the user wants a HaloPSA end user, requester, or contact by name, email, phone, client, site, department, or asset assignment. Supports Halo /users filters including client_id, site_id, organisation_id, department_id, asset_id, includeactive, includeinactive, search_phonenumbers, pagination, and ordering.",
+  inputSchema: haloUserFiltersSchema,
+  async execute(context, input) {
+    return {
+      summary: `find_contact is scaffolded for tenant ${context.tenantId}.`,
       data: [
         {
           status: "not_implemented",
@@ -216,10 +266,7 @@ export const haloPsaAdapter: ProviderAdapter = {
         "search_projects",
         "Use when the user asks about projects, project tickets, project status, or project work in HaloPSA."
       ),
-      createStubTool(
-        "find_contact",
-        "Use when the user wants a person, end user, requester, or contact in HaloPSA by name, email address, or phone number."
-      ),
+      haloFindContactTool,
       createStubTool(
         "search_documents",
         "Use when the user wants knowledge base articles, SOP-style documentation, or HaloPSA knowledge records."
