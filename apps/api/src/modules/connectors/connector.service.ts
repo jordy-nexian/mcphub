@@ -1509,7 +1509,7 @@ export class ConnectorService {
   private async listOpenHaloTickets(baseUrl: string, accessToken: string, input: Record<string, unknown>) {
     const rawQuery = typeof input.query === "string" ? input.query.trim() : undefined;
     const asksForProjects = /\b(project|projects|project ticket|project work|release|implementation)\b/i.test(rawQuery ?? "");
-    const naturalDateFilters = extractNaturalHaloDateFilters(rawQuery);
+    const detectedNaturalDateFilters = extractNaturalHaloDateFilters(rawQuery);
     const query = extractMeaningfulQuery(rawQuery, [
       /\bopen\b/g,
       /\brecent\b/g,
@@ -1532,6 +1532,10 @@ export class ConnectorService {
       /\b(?:in|during)\s+(?:january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|jun|jul|aug|sep|oct|nov|dec)(?:\s+\d{4})?\b/g,
       /\b(?:january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|jun|jul|aug|sep|oct|nov|dec)\s+\d{4}\b/g
     ]);
+    const queryWantsOpenItems = wantsOpenItems(input, rawQuery);
+    const shouldApplyNaturalDateFilters =
+      !queryWantsOpenItems || typeof input.closed_only === "boolean" || typeof input.closedOnly === "boolean";
+    const naturalDateFilters = shouldApplyNaturalDateFilters ? detectedNaturalDateFilters : {};
     const effectiveFilters: Record<string, unknown> = {
       ...naturalDateFilters,
       ...input
@@ -1611,7 +1615,7 @@ export class ConnectorService {
           ? false
           : needsComprehensiveResults
             ? true
-            : !wantsOpenItems(input, rawQuery);
+            : !queryWantsOpenItems;
 
     // Strip customer names from the query so the API search only contains the topic.
     // e.g. "sftp cmutual" → "sftp" when CMutual was resolved as a customer.
@@ -1766,7 +1770,7 @@ export class ConnectorService {
         if (needsComprehensiveResults) {
           return true;
         }
-        if (wantsOpenItems(effectiveFilters, rawQuery)) {
+        if (queryWantsOpenItems) {
           return isTicketOpen(ticket);
         }
         return true;
