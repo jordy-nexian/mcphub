@@ -459,6 +459,10 @@ function formatHaloDate(value: Date) {
   return `${year}-${month}-${day}`;
 }
 
+function addDays(value: Date, days: number) {
+  return new Date(value.getFullYear(), value.getMonth(), value.getDate() + days);
+}
+
 function extractNaturalHaloDateFilters(query: string | undefined): { datesearch?: string; startdate?: string; enddate?: string } {
   if (!query) {
     return {};
@@ -470,7 +474,7 @@ function extractNaturalHaloDateFilters(query: string | undefined): { datesearch?
   const dateRange = (start: Date, end: Date) => ({
     datesearch: "dateoccured",
     startdate: formatHaloDate(start),
-    enddate: formatHaloDate(end)
+    enddate: formatHaloDate(addDays(end, 1))
   });
 
   // YTD / year to date
