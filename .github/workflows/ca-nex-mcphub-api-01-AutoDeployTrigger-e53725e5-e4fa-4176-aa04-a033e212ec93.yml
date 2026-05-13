@@ -41,9 +41,19 @@ jobs:
             .
           docker push nexianmcphub01.azurecr.io/ca-nex-mcphub-api-01:${{ github.sha }}
 
+      - name: Configure ACR registry on Container App
+        run: |
+          az containerapp registry set \
+            --name ca-nex-mcphub-api-01 \
+            --resource-group rg-nex-test-play-uks-001 \
+            --server nexianmcphub01.azurecr.io \
+            --username ${{ secrets.CANEXMCPHUBAPI01_REGISTRY_USERNAME }} \
+            --password ${{ secrets.CANEXMCPHUBAPI01_REGISTRY_PASSWORD }}
+
       - name: Deploy to Container App
         run: |
           az containerapp update \
             --name ca-nex-mcphub-api-01 \
             --resource-group rg-nex-test-play-uks-001 \
             --image nexianmcphub01.azurecr.io/ca-nex-mcphub-api-01:${{ github.sha }}
+
