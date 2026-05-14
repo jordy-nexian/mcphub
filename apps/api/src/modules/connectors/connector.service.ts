@@ -166,7 +166,48 @@ function buildHaloCategoryPath(ticket: HaloTicketRecord) {
   return parts.length > 0 ? parts.join(" > ") : undefined;
 }
 
-function buildNormalizedHaloTicket(ticket: HaloTicketRecord, resolvedStatus: string | undefined) {
+function stripHtmlToText(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<\/(p|div|li|tr|h\d|br)>/gi, "\n")
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'")
+    .replace(/[ \t]+/g, " ")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function truncateText(value: string | undefined, max: number): string | undefined {
+  if (!value) return value;
+  if (value.length <= max) return value;
+  return `${value.slice(0, max).trimEnd()}…`;
+}
+
+function isTruthyFlag(input: Record<string, unknown>, keys: string[]) {
+  for (const key of keys) {
+    const value = input[key];
+    if (value === true) return true;
+    if (typeof value === "string" && /^(1|true|yes|on)$/i.test(value.trim())) return true;
+  }
+  return false;
+}
+
+type NormalizedHaloTicketOptions = { includeRaw?: boolean };
+
+function buildNormalizedHaloTicket(
+  ticket: HaloTicketRecord,
+  resolvedStatus: string | undefined,
+  options: NormalizedHaloTicketOptions = {}
+) {
   const openFields = buildHaloOpenRuleFields(ticket, resolvedStatus);
   const requestTypeName =
     pickString(ticket, [
@@ -206,7 +247,46 @@ function buildNormalizedHaloTicket(ticket: HaloTicketRecord, resolvedStatus: str
     is_closed: !openFields.isOpenByRule,
     resolved_status: resolvedStatus ?? "Unknown",
     ...openFields,
-    raw: ticket
+    ...(options.includeRaw ? { raw: ticket } : {})
+  };
+}
+
+function buildDetailedHaloTicket(
+  ticket: HaloTicketRecord,
+  resolvedStatus: string | undefined,
+  options: NormalizedHaloTicketOptions = {}
+) {
+  const base = buildNormalizedHaloTicket(ticket, resolvedStatus, options);
+
+  const description =
+    truncateText(stripHtmlToText(ticket.details ?? ticket.details_html), 4000) ??
+    truncateText(stripHtmlToText(ticket.userdetails ?? ticket.user_details), 4000) ??
+    truncateText(pickString(ticket, ["summary_text", "description", "body"]), 4000);
+
+  const requesterName =
+    pickString(ticket, ["user_name", "username", "reportedby", "reported_by", "contact_name"]) ??
+    pickNestedString(ticket, ["user", "contact", "reportedby"]);
+  const requesterEmail =
+    pickString(ticket, ["user_email", "useremail", "contact_email", "reportedby_email"]) ??
+    pickNestedString(ticket, ["user", "contact"]);
+
+  const agentName =
+    pickString(ticket, ["agent_name", "assigned_agent_name", "owner_name"]) ??
+    pickNestedString(ticket, ["agent", "assigned_agent", "owner"]);
+
+  const dateLogged = pickString(ticket, ["datecreated", "date_created", "datelogged", "date_logged", "created_at"]);
+  const targetDate = pickString(ticket, ["targetdate", "target_date", "fix_by", "fixby", "deadlinedate", "deadline_date"]);
+  const dateClosed = pickString(ticket, ["dateclosed", "date_closed", "closed_at"]);
+
+  return {
+    ...base,
+    description,
+    requester_name: requesterName,
+    requester_email: requesterEmail,
+    agent_name: agentName,
+    date_logged: dateLogged,
+    target_date: targetDate,
+    date_closed: dateClosed
   };
 }
 
@@ -887,26 +967,163 @@ function logNinjaDebug(event: string, payload: Record<string, unknown>) {
   console.info("[ninja-debug]", JSON.stringify({ event, ...payload }));
 }
 
-async function haloFetch(input: string | URL, init: RequestInit & { bodyPreview?: unknown } = {}) {
+type HaloFetchInit = RequestInit & {
+  bodyPreview?: unknown;
+  retries?: number;
+  timeoutMs?: number;
+};
+
+const HALO_DEFAULT_TIMEOUT_MS = Number(process.env.HALO_TIMEOUT_MS) || 8_000;
+const HALO_DEFAULT_RETRIES = Number(process.env.HALO_MAX_RETRIES) || 2;
+const HALO_RETRY_BASE_MS = 200;
+
+function isHaloRetryableStatus(status: number) {
+  return status === 408 || status === 425 || status === 429 || status >= 500;
+}
+
+function isHaloIdempotentMethod(method?: string) {
+  const upper = (method ?? "GET").toUpperCase();
+  return upper === "GET" || upper === "HEAD" || upper === "OPTIONS";
+}
+
+function computeHaloBackoff(attempt: number) {
+  const base = HALO_RETRY_BASE_MS * 2 ** (attempt - 1);
+  const jitter = Math.floor(Math.random() * base);
+  return base + jitter;
+}
+
+function parseHaloRetryAfter(header: string | null): number | undefined {
+  if (!header) return undefined;
+  const trimmed = header.trim();
+  const seconds = Number(trimmed);
+  if (Number.isFinite(seconds) && seconds >= 0) return seconds * 1000;
+  const date = Date.parse(trimmed);
+  if (!Number.isNaN(date)) {
+    const diff = date - Date.now();
+    return diff > 0 ? diff : 0;
+  }
+  return undefined;
+}
+
+function haloDelay(ms: number) {
+  return new Promise<void>((resolve) => setTimeout(resolve, ms));
+}
+
+async function haloFetch(input: string | URL, init: HaloFetchInit = {}) {
   const url = typeof input === "string" ? input : input.toString();
-  const { bodyPreview, ...requestInit } = init;
+  const { bodyPreview, retries, timeoutMs, ...requestInit } = init;
+  const method = (requestInit.method ?? "GET").toUpperCase();
+  const idempotent = isHaloIdempotentMethod(method);
+  const maxAttempts = Math.max(1, retries ?? (idempotent ? HALO_DEFAULT_RETRIES : 1));
+  const timeout = timeoutMs ?? HALO_DEFAULT_TIMEOUT_MS;
 
   logHaloDebug("request", {
-    method: requestInit.method ?? "GET",
+    method,
     url,
-    body: bodyPreview ?? (typeof requestInit.body === "string" ? requestInit.body : undefined)
+    body: bodyPreview ?? (typeof requestInit.body === "string" ? requestInit.body : undefined),
+    maxAttempts,
+    timeoutMs: timeout
   });
 
-  const response = await fetch(url, requestInit);
+  let lastError: unknown;
 
-  logHaloDebug("response", {
-    method: requestInit.method ?? "GET",
-    url,
-    status: response.status,
-    ok: response.ok
-  });
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeout);
 
-  return response;
+    try {
+      const response = await fetch(url, { ...requestInit, signal: controller.signal });
+      clearTimeout(timer);
+
+      logHaloDebug("response", {
+        method,
+        url,
+        status: response.status,
+        ok: response.ok,
+        attempt
+      });
+
+      if (!response.ok && isHaloRetryableStatus(response.status) && attempt < maxAttempts) {
+        const retryAfterMs = parseHaloRetryAfter(response.headers.get("retry-after"));
+        await haloDelay(retryAfterMs ?? computeHaloBackoff(attempt));
+        continue;
+      }
+
+      return response;
+    } catch (error) {
+      clearTimeout(timer);
+      lastError = error;
+
+      logHaloDebug("error", {
+        method,
+        url,
+        attempt,
+        error: error instanceof Error ? error.message : String(error)
+      });
+
+      if (attempt < maxAttempts && idempotent) {
+        await haloDelay(computeHaloBackoff(attempt));
+        continue;
+      }
+
+      throw error;
+    }
+  }
+
+  throw lastError ?? new Error("haloFetch exhausted retries without response");
+}
+
+class HaloRecordCache<T> {
+  private readonly memory = new Map<string, { expiresAt: number; records: T[] }>();
+
+  constructor(
+    private readonly redis: Redis | undefined,
+    private readonly namespace: string,
+    private readonly ttlMs: number
+  ) {}
+
+  async get(key: string): Promise<T[] | undefined> {
+    const memHit = this.memory.get(key);
+    if (memHit && memHit.expiresAt > Date.now()) {
+      return memHit.records;
+    }
+
+    if (this.redis) {
+      try {
+        const raw = await this.redis.get(this.redisKey(key));
+        if (raw) {
+          const records = JSON.parse(raw) as T[];
+          this.memory.set(key, { expiresAt: Date.now() + this.ttlMs, records });
+          return records;
+        }
+      } catch (error) {
+        console.warn("[halo-cache]", `redis read failed (${this.namespace}):`, error instanceof Error ? error.message : error);
+      }
+    }
+
+    return undefined;
+  }
+
+  async set(key: string, records: T[]) {
+    this.memory.set(key, { expiresAt: Date.now() + this.ttlMs, records });
+
+    if (this.redis) {
+      try {
+        await this.redis.set(this.redisKey(key), JSON.stringify(records), "PX", this.ttlMs);
+      } catch (error) {
+        console.warn("[halo-cache]", `redis write failed (${this.namespace}):`, error instanceof Error ? error.message : error);
+      }
+    }
+  }
+
+  private redisKey(key: string) {
+    return `halo:cache:${this.namespace}:${key}`;
+  }
+}
+
+function buildHaloCacheKey(baseUrl: string, accessToken: string) {
+  const tokenHash = crypto.createHash("sha256").update(accessToken).digest("hex").slice(0, 16);
+  return `${baseUrl}|${tokenHash}`;
 }
 
 export class ConnectorService {
@@ -921,8 +1138,8 @@ export class ConnectorService {
   private readonly refreshService = new TokenRefreshService(this.redis, this.encryption);
   private readonly store = ConnectedAccountStore.createDefault();
   private readonly configStore = ConnectorConfigStore.createDefault();
-  private readonly haloStatusCache = new Map<string, { expiresAt: number; records: HaloStatusRecord[] }>();
-  private readonly haloCategoryCache = new Map<string, { expiresAt: number; records: HaloCategoryRecord[] }>();
+  private readonly haloStatusCache = new HaloRecordCache<HaloStatusRecord>(this.redis, "status", 5 * 60 * 1000);
+  private readonly haloCategoryCache = new HaloRecordCache<HaloCategoryRecord>(this.redis, "category", 10 * 60 * 1000);
 
   constructor(private readonly auditService: AuditService) {
     this.redis?.on("error", (error) => {
@@ -2132,10 +2349,10 @@ export class ConnectorService {
   }
 
   private async fetchHaloStatuses(baseUrl: string, accessToken: string) {
-    const cacheKey = `${baseUrl}|${accessToken.slice(0, 12)}`;
-    const cached = this.haloStatusCache.get(cacheKey);
-    if (cached && cached.expiresAt > Date.now()) {
-      return cached.records;
+    const cacheKey = buildHaloCacheKey(baseUrl, accessToken);
+    const cached = await this.haloStatusCache.get(cacheKey);
+    if (cached) {
+      return cached;
     }
 
     for (const path of ["/api/status", "/api/ticketstatus", "/api/statuses"]) {
@@ -2153,7 +2370,7 @@ export class ConnectorService {
       const payload = (await response.json()) as unknown;
       const records = normalizeCollectionPayload(payload, ["statuses", "ticketstatuses", "results", "data"]);
       if (records.length > 0) {
-        this.haloStatusCache.set(cacheKey, { expiresAt: Date.now() + 5 * 60 * 1000, records });
+        await this.haloStatusCache.set(cacheKey, records);
         return records;
       }
     }
@@ -2189,10 +2406,10 @@ export class ConnectorService {
   }
 
   private async fetchHaloCategories(baseUrl: string, accessToken: string): Promise<HaloCategoryRecord[]> {
-    const cacheKey = `${baseUrl}|${accessToken.slice(0, 12)}`;
-    const cached = this.haloCategoryCache.get(cacheKey);
-    if (cached && cached.expiresAt > Date.now()) {
-      return cached.records;
+    const cacheKey = buildHaloCacheKey(baseUrl, accessToken);
+    const cached = await this.haloCategoryCache.get(cacheKey);
+    if (cached) {
+      return cached;
     }
 
     for (const path of ["/api/Category", "/api/category", "/api/categories"]) {
@@ -2210,7 +2427,7 @@ export class ConnectorService {
       const payload = (await response.json()) as unknown;
       const records = normalizeCollectionPayload(payload, ["categories", "results", "data"]);
       if (records.length > 0) {
-        this.haloCategoryCache.set(cacheKey, { expiresAt: Date.now() + 10 * 60 * 1000, records });
+        await this.haloCategoryCache.set(cacheKey, records);
         return records;
       }
     }
@@ -2526,9 +2743,17 @@ export class ConnectorService {
       throw new Error("list_ticket_actions requires a ticket id");
     }
 
+    const includeRaw = isTruthyFlag(input, ["include_raw", "includeRaw", "raw", "full"]);
+    const requestedCount = pickNumber(input, ["count", "limit", "max"]);
+    const count = Math.max(1, Math.min(50, requestedCount ?? 10));
+    const noteCharLimit = Math.max(200, Math.min(4000, pickNumber(input, ["note_char_limit", "noteMaxChars"]) ?? 1200));
+
     const url = new URL(`${baseUrl}/api/actions`);
-    url.searchParams.set("count", "50");
+    url.searchParams.set("count", String(count));
     url.searchParams.set("ticket_id", ticketId);
+    url.searchParams.set("includehtmlnote", "false");
+    url.searchParams.set("includehtmlemail", "false");
+    url.searchParams.set("includeattachments", "false");
 
     const response = await haloFetch(url, {
       headers: buildHaloHeaders(accessToken)
@@ -2540,44 +2765,61 @@ export class ConnectorService {
     }
 
     const payload = (await response.json()) as unknown;
-    const actions = normalizeCollectionPayload(payload, ["actions"]).slice(0, 50);
+    const actions = normalizeCollectionPayload(payload, ["actions"]).slice(0, count);
 
     return {
       summary:
         actions.length > 0
-          ? `Loaded ${actions.length} HaloPSA actions for ticket ${ticketId}. Results include agent, note text, action type, and created time.`
+          ? `Loaded ${actions.length} HaloPSA actions for ticket ${ticketId}. Results include agent, note text, action type, and created time.${includeRaw ? "" : " Pass include_raw: true to also return raw Halo action payloads."}`
           : `No HaloPSA actions found for ticket ${ticketId}.`,
-      data: actions.map((action) => ({
-        id: pickNumber(action, ["id", "action_id"]),
-        ticketId: pickNumber(action, ["ticket_id", "ticketid"]),
-        agent: pickString(action, ["agent_name", "agent", "who"]),
-        note: pickString(action, ["note", "note_html", "outcome", "details"]),
-        actionType: pickString(action, ["action_type", "type", "category"]),
-        createdAt: pickString(action, ["datecreated", "created_at", "datetime"]),
-        raw: action
-      })),
+      data: actions.map((action) => {
+        const note =
+          truncateText(stripHtmlToText(action.note_html ?? action.note), noteCharLimit) ??
+          truncateText(pickString(action, ["note", "outcome", "details"]), noteCharLimit);
+        return {
+          id: pickNumber(action, ["id", "action_id"]),
+          ticketId: pickNumber(action, ["ticket_id", "ticketid"]),
+          agent: pickString(action, ["agent_name", "agent", "who"]),
+          note,
+          actionType: pickString(action, ["action_type", "type", "category", "outcome"]),
+          createdAt: pickString(action, ["datecreated", "created_at", "datetime"]),
+          ...(includeRaw ? { raw: action } : {})
+        };
+      }),
       source: "halopsa"
     };
   }
 
   private async getHaloTicketWithActions(baseUrl: string, accessToken: string, input: Record<string, unknown>) {
-    const ticket = await this.getHaloTicket(baseUrl, accessToken, input);
-    const ticketRecord = ticket.data[0] as Record<string, unknown> | undefined;
-    const resolvedTicketId =
-      pickNumber(ticketRecord ?? {}, ["id"]) ??
-      pickNumber(input, ["id", "ticketId", "ticket_id"]) ??
-      (typeof input.query === "string" && !Number.isNaN(Number(input.query.trim())) ? Number(input.query.trim()) : undefined);
+    const rawId = input.id ?? input.ticketId ?? input.ticket_id ?? input.query;
+    const upfrontTicketId =
+      typeof rawId === "number"
+        ? rawId
+        : typeof rawId === "string" && !Number.isNaN(Number(rawId.trim()))
+          ? Number(rawId.trim())
+          : undefined;
 
-    const actions = resolvedTicketId
-      ? await this.listHaloTicketActions(baseUrl, accessToken, { ticket_id: resolvedTicketId })
-      : { summary: "No ticket actions loaded.", data: [], source: "halopsa" };
+    const [ticket, actions] = await Promise.all([
+      this.getHaloTicket(baseUrl, accessToken, input),
+      upfrontTicketId !== undefined
+        ? this.listHaloTicketActions(baseUrl, accessToken, { ...input, ticket_id: upfrontTicketId })
+        : Promise.resolve({ summary: "No ticket actions loaded.", data: [] as unknown[], source: "halopsa" })
+    ]);
+
+    const ticketRecord = ticket.data[0] as Record<string, unknown> | undefined;
+    const resolvedTicketId = pickNumber(ticketRecord ?? {}, ["id"]) ?? upfrontTicketId;
+
+    const finalActions =
+      upfrontTicketId === undefined && resolvedTicketId !== undefined
+        ? await this.listHaloTicketActions(baseUrl, accessToken, { ...input, ticket_id: resolvedTicketId })
+        : actions;
 
     return {
       summary: `Loaded HaloPSA ticket with recent actions. Result includes the main ticket fields and recent internal updates or actions.`,
       data: [
         {
           ticket: ticket.data[0] ?? null,
-          recentActions: actions.data
+          recentActions: finalActions.data
         }
       ],
       source: "halopsa"
@@ -3888,9 +4130,17 @@ export class ConnectorService {
       throw new Error("get_ticket requires an id");
     }
 
+    const includeRaw = isTruthyFlag(input, ["include_raw", "includeRaw", "raw", "full"]);
+
     let ticket: HaloTicketRecord | undefined;
 
-    const directResponse = await haloFetch(`${baseUrl}/api/tickets/${id}`, {
+    const directUrl = new URL(`${baseUrl}/api/tickets/${id}`);
+    directUrl.searchParams.set("includedetails", "true");
+    directUrl.searchParams.set("includelastaction", "true");
+    directUrl.searchParams.set("includechildtickets", "false");
+    directUrl.searchParams.set("includeattachments", "false");
+
+    const directResponse = await haloFetch(directUrl, {
       headers: buildHaloHeaders(accessToken)
     });
 
@@ -3923,13 +4173,8 @@ export class ConnectorService {
     const resolvedStatus = await this.resolveHaloTicketStatusName(baseUrl, accessToken, ticket);
 
     return {
-      summary: `Loaded HaloPSA ticket ${id}. Result includes the ticket summary, status, customer, priority, and raw Halo details.`,
-      data: [
-        {
-          ...buildNormalizedHaloTicket(ticket, resolvedStatus),
-          details: ticket
-        }
-      ],
+      summary: `Loaded HaloPSA ticket ${id}. Result includes summary, status, customer, priority, description, requester, agent, and key dates.${includeRaw ? "" : " Pass include_raw: true to also return the full Halo payload."}`,
+      data: [buildDetailedHaloTicket(ticket, resolvedStatus, { includeRaw })],
       source: "halopsa"
     };
   }

@@ -12,7 +12,8 @@
     "test": "node --test",
     "prisma:generate": "DATABASE_URL=${DATABASE_URL:-postgresql://postgres:postgres@localhost:5432/nexian_mcp_hub} prisma generate --schema ../../prisma/schema.prisma",
     "prisma:migrate": "DATABASE_URL=${DATABASE_URL:-postgresql://postgres:postgres@localhost:5432/nexian_mcp_hub} prisma migrate dev --schema ../../prisma/schema.prisma",
-    "prisma:push": "DATABASE_URL=${DATABASE_URL:-postgresql://postgres:postgres@localhost:5432/nexian_mcp_hub} prisma db push --schema ../../prisma/schema.prisma"
+    "prisma:push": "DATABASE_URL=${DATABASE_URL:-postgresql://postgres:postgres@localhost:5432/nexian_mcp_hub} prisma db push --schema ../../prisma/schema.prisma",
+    "issue-mcp-token": "tsx scripts/issue-mcp-token.ts"
   },
   "dependencies": {
     "@nexian/connectors": "workspace:*",
