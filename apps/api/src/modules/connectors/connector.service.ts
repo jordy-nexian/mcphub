@@ -36,12 +36,73 @@ type StoredConnectorConfig = {
   webhookBaseUrl?: string;
   apiEndpoint?: string;
   environment?: string;
+  azureAgentResponsesUrl?: string;
+  azureAgentActivityUrl?: string;
+  azureAgentPrincipalId?: string;
+  azureAgentTenantId?: string;
+  azureAgentApiKeyEncrypted?: string;
 };
 
 type N8nWorkflowRecord = Record<string, unknown>;
 type N8nExecutionRecord = Record<string, unknown>;
 type HaloStatusRecord = Record<string, unknown>;
 type HaloCategoryRecord = Record<string, unknown>;
+
+function extractAgentReply(payload: unknown): string {
+  if (typeof payload === "string") {
+    return payload;
+  }
+  if (!payload || typeof payload !== "object") {
+    return "";
+  }
+  const record = payload as Record<string, unknown>;
+
+  if (typeof record.output_text === "string" && record.output_text.trim()) {
+    return record.output_text;
+  }
+
+  const output = record.output;
+  if (Array.isArray(output)) {
+    const parts: string[] = [];
+    for (const item of output) {
+      if (!item || typeof item !== "object") continue;
+      const itemRecord = item as Record<string, unknown>;
+      const content = itemRecord.content;
+      if (Array.isArray(content)) {
+        for (const piece of content) {
+          if (piece && typeof piece === "object") {
+            const pieceRecord = piece as Record<string, unknown>;
+            const text = pieceRecord.text ?? pieceRecord.value;
+            if (typeof text === "string") {
+              parts.push(text);
+            } else if (text && typeof text === "object") {
+              const textValue = (text as Record<string, unknown>).value;
+              if (typeof textValue === "string") {
+                parts.push(textValue);
+              }
+            }
+          }
+        }
+      } else if (typeof itemRecord.text === "string") {
+        parts.push(itemRecord.text);
+      }
+    }
+    if (parts.length > 0) {
+      return parts.join("\n").trim();
+    }
+  }
+
+  const choices = record.choices;
+  if (Array.isArray(choices) && choices[0] && typeof choices[0] === "object") {
+    const choice = choices[0] as Record<string, unknown>;
+    const messageContent = (choice.message as Record<string, unknown> | undefined)?.content;
+    if (typeof messageContent === "string") {
+      return messageContent;
+    }
+  }
+
+  return JSON.stringify(payload);
+}
 
 function pickString(record: Record<string, unknown>, keys: string[]) {
   for (const key of keys) {
@@ -1566,7 +1627,12 @@ export class ConnectorService {
               ?? `${config.apiUrl}/oauth/actionstep/callback`,
             scopes: (configJson.scopes ?? this.getDefaultActionStepScopes()).join(" "),
             environment: configJson.environment ?? process.env.ACTIONSTEP_ENV ?? "production",
-            hasClientSecret: Boolean(configJson.clientSecretEncrypted)
+            hasClientSecret: Boolean(configJson.clientSecretEncrypted),
+            azureAgentResponsesUrl: configJson.azureAgentResponsesUrl ?? "",
+            azureAgentActivityUrl: configJson.azureAgentActivityUrl ?? "",
+            azureAgentPrincipalId: configJson.azureAgentPrincipalId ?? "",
+            azureAgentTenantId: configJson.azureAgentTenantId ?? "",
+            hasAzureAgentApiKey: Boolean(configJson.azureAgentApiKeyEncrypted)
           }
         };
       default:
@@ -1596,6 +1662,55 @@ export class ConnectorService {
     });
 
     return this.getConnectorConfig(tenantId, provider);
+  }
+
+  async chatWithActionStepAgent(
+    tenantId: string,
+    message: string,
+    history: Array<{ role: "user" | "assistant" | "system"; content: string }>
+  ): Promise<{ reply: string }> {
+    const stored = ((await this.configStore.get(tenantId, "actionstep"))?.configJson ?? {}) as StoredConnectorConfig;
+    const responsesUrl = stored.azureAgentResponsesUrl?.trim();
+    const apiKey = stored.azureAgentApiKeyEncrypted
+      ? this.encryption.decrypt(stored.azureAgentApiKeyEncrypted)
+      : undefined;
+
+    if (!responsesUrl) {
+      throw new Error("Save the Azure Foundry Responses endpoint in ActionStep settings before chatting.");
+    }
+    if (!apiKey) {
+      throw new Error("Save the Azure Foundry API key in ActionStep settings before chatting.");
+    }
+
+    const inputItems = [
+      ...history.map((entry) => ({ role: entry.role, content: entry.content })),
+      { role: "user" as const, content: message }
+    ];
+
+    const response = await fetch(responsesUrl, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        accept: "application/json",
+        "api-key": apiKey,
+        authorization: `Bearer ${apiKey}`
+      },
+      body: JSON.stringify({ input: inputItems })
+    });
+
+    const text = await response.text();
+    if (!response.ok) {
+      throw new Error(`Azure Foundry chat failed (${response.status}): ${text.slice(0, 300)}`);
+    }
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(text);
+    } catch {
+      return { reply: text };
+    }
+
+    return { reply: extractAgentReply(parsed) };
   }
 
   async listN8nWorkflows(tenantId: string) {
@@ -4580,7 +4695,11 @@ export class ConnectorService {
           clientSecretEncrypted,
           webhookBaseUrl: this.normalizeApiUrl(this.readOptionalString(input, "redirectUri")) ?? existing.webhookBaseUrl
         } satisfies StoredConnectorConfig;
-      case "actionstep":
+      case "actionstep": {
+        const rawAzureKey = this.readOptionalString(input, "azureAgentApiKey");
+        const azureAgentApiKeyEncrypted = rawAzureKey
+          ? this.encryption.encrypt(rawAzureKey)
+          : existing.azureAgentApiKeyEncrypted;
         return {
           clientId,
           clientSecretEncrypted,
@@ -4592,8 +4711,18 @@ export class ConnectorService {
           environment:
             this.readOptionalString(input, "environment")?.toLowerCase()
             ?? existing.environment
-            ?? "production"
+            ?? "production",
+          azureAgentResponsesUrl:
+            this.readOptionalString(input, "azureAgentResponsesUrl") ?? existing.azureAgentResponsesUrl,
+          azureAgentActivityUrl:
+            this.readOptionalString(input, "azureAgentActivityUrl") ?? existing.azureAgentActivityUrl,
+          azureAgentPrincipalId:
+            this.readOptionalString(input, "azureAgentPrincipalId") ?? existing.azureAgentPrincipalId,
+          azureAgentTenantId:
+            this.readOptionalString(input, "azureAgentTenantId") ?? existing.azureAgentTenantId,
+          azureAgentApiKeyEncrypted
         } satisfies StoredConnectorConfig;
+      }
       default:
         return existing;
     }

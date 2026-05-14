@@ -89,7 +89,13 @@ const connectorConfigSchema = z.object({
   clientSecret: z.string().optional(),
   redirectUri: z.string().optional(),
   scopes: z.union([z.string(), z.array(z.string())]).optional(),
-  tenantId: z.string().optional()
+  tenantId: z.string().optional(),
+  environment: z.string().optional(),
+  azureAgentResponsesUrl: z.string().optional(),
+  azureAgentActivityUrl: z.string().optional(),
+  azureAgentPrincipalId: z.string().optional(),
+  azureAgentTenantId: z.string().optional(),
+  azureAgentApiKey: z.string().optional()
 });
 
 const n8nExecutionsQuerySchema = z.object({
@@ -677,6 +683,35 @@ export function registerApiRoutes(
     const provider = parseProviderParam(request);
     const body = connectorConfigSchema.parse(request.body ?? {});
     return deps.connectorService.saveConnectorConfig(auth.tenantId, auth.userId, provider, body);
+  });
+
+  app.post("/connectors/actionstep/chat", async (request, reply) => {
+    const auth = parsePlatformAuth(request.headers.authorization, deps.authService);
+    if (!auth) {
+      return reply.status(401).send({ error: "unauthorized" });
+    }
+
+    const body = z
+      .object({
+        message: z.string().min(1).max(8000),
+        history: z
+          .array(
+            z.object({
+              role: z.enum(["user", "assistant", "system"]),
+              content: z.string().max(8000)
+            })
+          )
+          .max(40)
+          .default([])
+      })
+      .parse(request.body ?? {});
+
+    try {
+      return await deps.connectorService.chatWithActionStepAgent(auth.tenantId, body.message, body.history);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Could not reach the ActionStep agent.";
+      return reply.status(502).send({ error: "chat_failed", message });
+    }
   });
 
   app.get("/connectors/n8n/workflows", async (request, reply) => {

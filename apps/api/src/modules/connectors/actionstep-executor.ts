@@ -113,6 +113,72 @@ function pagination(input: Record<string, unknown>) {
   };
 }
 
+type PagingMeta = {
+  recordCount?: number;
+  pageCount?: number;
+  page?: number;
+  pageSize?: number;
+};
+
+function extractPaging(payload: unknown): PagingMeta {
+  if (!payload || typeof payload !== "object") return {};
+  const meta = (payload as Record<string, unknown>).meta;
+  if (!meta || typeof meta !== "object") return {};
+  const paging = (meta as Record<string, unknown>).paging;
+  if (!paging || typeof paging !== "object") return {};
+  const p = paging as Record<string, unknown>;
+  const records = (p.records ?? {}) as Record<string, unknown>;
+  return {
+    recordCount: typeof records.recordCount === "number"
+      ? records.recordCount
+      : typeof p.totalRecords === "number"
+        ? (p.totalRecords as number)
+        : undefined,
+    pageCount: typeof records.pageCount === "number"
+      ? records.pageCount
+      : typeof p.totalPages === "number"
+        ? (p.totalPages as number)
+        : undefined,
+    page: typeof p.page === "number" ? (p.page as number) : undefined,
+    pageSize: typeof p.resultsPerPage === "number"
+      ? (p.resultsPerPage as number)
+      : typeof p.pageSize === "number"
+        ? (p.pageSize as number)
+        : undefined
+  };
+}
+
+const AUTO_PAGE_HARD_CAP = 5; // pages × pageSize (200) = 1000 records max
+const AUTO_PAGE_SIZE = 200;
+
+async function fetchAllPages(
+  deps: ActionStepExecutorDeps,
+  account: ConnectedAccountRecord,
+  endpoint: string,
+  path: string,
+  baseQuery: Record<string, string | number | undefined>,
+  collectionKey: string
+): Promise<{ records: Record<string, unknown>[]; paging: PagingMeta; pagesFetched: number }> {
+  const records: Record<string, unknown>[] = [];
+  let pagesFetched = 0;
+  let lastPaging: PagingMeta = {};
+
+  for (let page = 1; page <= AUTO_PAGE_HARD_CAP; page++) {
+    const url = buildUrl(endpoint, path, { ...baseQuery, page, pageSize: AUTO_PAGE_SIZE });
+    const { payload } = await fetchWithRefresh(deps, account, url);
+    const slice = pickCollection(payload, collectionKey);
+    records.push(...slice);
+    pagesFetched++;
+    lastPaging = extractPaging(payload);
+
+    const totalPages = lastPaging.pageCount;
+    if (slice.length < AUTO_PAGE_SIZE) break;
+    if (typeof totalPages === "number" && page >= totalPages) break;
+  }
+
+  return { records, paging: lastPaging, pagesFetched };
+}
+
 function isFullPayload(input: Record<string, unknown>): boolean {
   const value = input["include_full"];
   if (typeof value === "boolean") return value;
@@ -250,16 +316,29 @@ function slimTask(record: Record<string, unknown>): Record<string, unknown> {
 const TIMERECORD_FIELDS = [
   "id",
   "date",
+  "start",
+  "end",
   "duration",
   "units",
-  "rate",
+  "actualUnits",
+  "actualMinutes",
+  "chargeableUnits",
+  "chargeableMinutes",
+  "chargeableValue",
   "billableValue",
+  "billable",
+  "billed",
+  "chargeable",
+  "rate",
+  "total",
   "notes",
   "narrative",
-  "description"
+  "description",
+  "createdTimestamp",
+  "modifiedTimestamp"
 ] as const;
 
-const TIMERECORD_LINK_FIELDS = ["action", "participant", "activity", "user"] as const;
+const TIMERECORD_LINK_FIELDS = ["action", "participant", "activity", "user", "feeEarner", "timekeeper"] as const;
 
 function slimTimeRecord(record: Record<string, unknown>): Record<string, unknown> {
   const base = pickFields(record, TIMERECORD_FIELDS);
@@ -477,18 +556,39 @@ async function listTasks(
   input: Record<string, unknown>
 ): Promise<NormalizedToolResponse> {
   const endpoint = getApiEndpoint(account);
-  const { page, pageSize } = pagination(input);
-  const url = buildUrl(endpoint, "/api/rest/tasks", {
-    page,
-    pageSize,
-    action: readNumber(input, "matter_id"),
+  const matterId = readNumber(input, "matter_id");
+  const baseQuery = {
+    action: matterId,
     assignee: readNumber(input, "assigned_to_participant_id"),
     status: readString(input, "status")
-  });
-  const { payload } = await fetchWithRefresh(deps, account, url);
-  const tasks = pickCollection(payload, "tasks");
+  };
+
+  let tasks: Record<string, unknown>[];
+  let paging: PagingMeta = {};
+  let pagesFetched = 0;
+
+  if (matterId !== undefined) {
+    const result = await fetchAllPages(deps, account, endpoint, "/api/rest/tasks", baseQuery, "tasks");
+    tasks = result.records;
+    paging = result.paging;
+    pagesFetched = result.pagesFetched;
+  } else {
+    const { page, pageSize } = pagination(input);
+    const url = buildUrl(endpoint, "/api/rest/tasks", { ...baseQuery, page, pageSize });
+    const { payload } = await fetchWithRefresh(deps, account, url);
+    tasks = pickCollection(payload, "tasks");
+    paging = extractPaging(payload);
+    pagesFetched = 1;
+  }
+
+  const totalKnown = paging.recordCount;
+  const truncatedNote =
+    typeof totalKnown === "number" && tasks.length < totalKnown
+      ? ` (ActionStep reports ${totalKnown} total; fetched ${pagesFetched} page(s)).`
+      : "";
+
   return {
-    summary: `Found ${tasks.length} task${tasks.length === 1 ? "" : "s"} in ActionStep.`,
+    summary: `Found ${tasks.length} task${tasks.length === 1 ? "" : "s"}${matterId ? ` on matter ${matterId}` : ""} in ActionStep.${truncatedNote}`,
     data: isFullPayload(input) ? tasks : tasks.map(slimTask),
     source: SOURCE
   };
@@ -500,19 +600,45 @@ async function listTimeEntries(
   input: Record<string, unknown>
 ): Promise<NormalizedToolResponse> {
   const endpoint = getApiEndpoint(account);
-  const { page, pageSize } = pagination(input);
-  const url = buildUrl(endpoint, "/api/rest/timerecords", {
-    page,
-    pageSize,
-    action: readNumber(input, "matter_id"),
-    participant: readNumber(input, "participant_id"),
-    dateFrom: readString(input, "date_from"),
-    dateTo: readString(input, "date_to")
-  });
-  const { payload } = await fetchWithRefresh(deps, account, url);
-  const entries = pickCollection(payload, "timerecords");
+  const matterId = readNumber(input, "matter_id");
+  const participantId = readNumber(input, "participant_id");
+  const dateFrom = readString(input, "date_from");
+  const dateTo = readString(input, "date_to");
+
+  const baseQuery = {
+    action: matterId,
+    participant: participantId,
+    dateFrom,
+    dateTo
+  };
+
+  let entries: Record<string, unknown>[];
+  let paging: PagingMeta = {};
+  let pagesFetched = 0;
+
+  if (matterId !== undefined) {
+    const result = await fetchAllPages(deps, account, endpoint, "/api/rest/timerecords", baseQuery, "timerecords");
+    entries = result.records;
+    paging = result.paging;
+    pagesFetched = result.pagesFetched;
+  } else {
+    const { page, pageSize } = pagination(input);
+    const url = buildUrl(endpoint, "/api/rest/timerecords", { ...baseQuery, page, pageSize });
+    const { payload } = await fetchWithRefresh(deps, account, url);
+    entries = pickCollection(payload, "timerecords");
+    paging = extractPaging(payload);
+    pagesFetched = 1;
+  }
+
+  const totalKnown = paging.recordCount;
+  const pageCount = paging.pageCount;
+  const truncatedNote =
+    typeof totalKnown === "number" && entries.length < totalKnown
+      ? ` (ActionStep reports ${totalKnown} total across ${pageCount ?? "?"} page(s); fetched ${pagesFetched} page(s)).`
+      : "";
+
   return {
-    summary: `Found ${entries.length} time entr${entries.length === 1 ? "y" : "ies"} in ActionStep.`,
+    summary: `Found ${entries.length} time entr${entries.length === 1 ? "y" : "ies"}${matterId ? ` on matter ${matterId}` : ""} in ActionStep.${truncatedNote}`,
     data: isFullPayload(input) ? entries : entries.map(slimTimeRecord),
     source: SOURCE
   };
@@ -524,19 +650,40 @@ async function listFileNotes(
   input: Record<string, unknown>
 ): Promise<NormalizedToolResponse> {
   const endpoint = getApiEndpoint(account);
-  const { page, pageSize } = pagination(input);
-  const url = buildUrl(endpoint, "/api/rest/filenotes", {
-    page,
-    pageSize,
-    action: readNumber(input, "matter_id"),
+  const matterId = readNumber(input, "matter_id");
+  const baseQuery = {
+    action: matterId,
     enteredBy: readNumber(input, "entered_by_participant_id"),
     dateFrom: readString(input, "date_from"),
     dateTo: readString(input, "date_to")
-  });
-  const { payload } = await fetchWithRefresh(deps, account, url);
-  const notes = pickCollection(payload, "filenotes");
+  };
+
+  let notes: Record<string, unknown>[];
+  let paging: PagingMeta = {};
+  let pagesFetched = 0;
+
+  if (matterId !== undefined) {
+    const result = await fetchAllPages(deps, account, endpoint, "/api/rest/filenotes", baseQuery, "filenotes");
+    notes = result.records;
+    paging = result.paging;
+    pagesFetched = result.pagesFetched;
+  } else {
+    const { page, pageSize } = pagination(input);
+    const url = buildUrl(endpoint, "/api/rest/filenotes", { ...baseQuery, page, pageSize });
+    const { payload } = await fetchWithRefresh(deps, account, url);
+    notes = pickCollection(payload, "filenotes");
+    paging = extractPaging(payload);
+    pagesFetched = 1;
+  }
+
+  const totalKnown = paging.recordCount;
+  const truncatedNote =
+    typeof totalKnown === "number" && notes.length < totalKnown
+      ? ` (ActionStep reports ${totalKnown} total; fetched ${pagesFetched} page(s)).`
+      : "";
+
   return {
-    summary: `Found ${notes.length} file note${notes.length === 1 ? "" : "s"} in ActionStep.`,
+    summary: `Found ${notes.length} file note${notes.length === 1 ? "" : "s"}${matterId ? ` on matter ${matterId}` : ""} in ActionStep.${truncatedNote}`,
     data: isFullPayload(input) ? notes : notes.map(slimFileNote),
     source: SOURCE
   };
@@ -548,19 +695,40 @@ async function listEmails(
   input: Record<string, unknown>
 ): Promise<NormalizedToolResponse> {
   const endpoint = getApiEndpoint(account);
-  const { page, pageSize } = pagination(input);
-  const url = buildUrl(endpoint, "/api/rest/emails", {
-    page,
-    pageSize,
-    action: readNumber(input, "matter_id"),
+  const matterId = readNumber(input, "matter_id");
+  const baseQuery = {
+    action: matterId,
     participant: readNumber(input, "participant_id"),
     dateFrom: readString(input, "date_from"),
     dateTo: readString(input, "date_to")
-  });
-  const { payload } = await fetchWithRefresh(deps, account, url);
-  const emails = pickCollection(payload, "emails");
+  };
+
+  let emails: Record<string, unknown>[];
+  let paging: PagingMeta = {};
+  let pagesFetched = 0;
+
+  if (matterId !== undefined) {
+    const result = await fetchAllPages(deps, account, endpoint, "/api/rest/emails", baseQuery, "emails");
+    emails = result.records;
+    paging = result.paging;
+    pagesFetched = result.pagesFetched;
+  } else {
+    const { page, pageSize } = pagination(input);
+    const url = buildUrl(endpoint, "/api/rest/emails", { ...baseQuery, page, pageSize });
+    const { payload } = await fetchWithRefresh(deps, account, url);
+    emails = pickCollection(payload, "emails");
+    paging = extractPaging(payload);
+    pagesFetched = 1;
+  }
+
+  const totalKnown = paging.recordCount;
+  const truncatedNote =
+    typeof totalKnown === "number" && emails.length < totalKnown
+      ? ` (ActionStep reports ${totalKnown} total; fetched ${pagesFetched} page(s)).`
+      : "";
+
   return {
-    summary: `Found ${emails.length} email${emails.length === 1 ? "" : "s"} in ActionStep.`,
+    summary: `Found ${emails.length} email${emails.length === 1 ? "" : "s"}${matterId ? ` on matter ${matterId}` : ""} in ActionStep.${truncatedNote}`,
     data: isFullPayload(input) ? emails : emails.map(slimEmail),
     source: SOURCE
   };

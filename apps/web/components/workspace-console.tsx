@@ -29,6 +29,18 @@ type ConnectorConfig = {
   tenantId: string;
   environment: string;
   hasClientSecret: boolean;
+  azureAgentResponsesUrl?: string;
+  azureAgentActivityUrl?: string;
+  azureAgentPrincipalId?: string;
+  azureAgentTenantId?: string;
+  azureAgentApiKey?: string;
+  hasAzureAgentApiKey?: boolean;
+};
+
+type ChatMessage = {
+  id: string;
+  role: "user" | "assistant" | "system";
+  content: string;
 };
 
 type Permission = {
@@ -175,7 +187,7 @@ const initialState: DemoState = {
         "list_matter_emails"
       ],
       realOAuth: true,
-      logoUrl: "https://www.actionstep.com/wp-content/uploads/2021/02/Actionstep_Logo_RGB.png",
+      logoUrl: "https://www.actionstep.com/wp-content/uploads/2024/05/as-desktop-head-logo.svg",
       accent: "actionstep"
     }
   ],
@@ -249,6 +261,10 @@ export function WorkspaceConsole({
   const [connectorConfigs, setConnectorConfigs] = useState<Record<string, ConnectorConfig>>({});
   const [savingConfigId, setSavingConfigId] = useState("");
   const [visibleProviders, setVisibleProviders] = useState<Set<string> | null>(null);
+  const [actionstepTab, setActionstepTab] = useState<"overview" | "chat" | "settings">("overview");
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+  const [chatInput, setChatInput] = useState("");
+  const [chatSending, setChatSending] = useState(false);
 
   const origin = typeof window === "undefined" ? "http://localhost:3000" : window.location.origin;
   const apiOrigin = useMemo(
@@ -408,7 +424,13 @@ export function WorkspaceConsole({
                 scopes: payload.config.scopes ?? "",
                 tenantId: payload.config.tenantId ?? "",
                 environment: payload.config.environment ?? "",
-                hasClientSecret: Boolean(payload.config.hasClientSecret)
+                hasClientSecret: Boolean(payload.config.hasClientSecret),
+                azureAgentResponsesUrl: payload.config.azureAgentResponsesUrl ?? "",
+                azureAgentActivityUrl: payload.config.azureAgentActivityUrl ?? "",
+                azureAgentPrincipalId: payload.config.azureAgentPrincipalId ?? "",
+                azureAgentTenantId: payload.config.azureAgentTenantId ?? "",
+                azureAgentApiKey: "",
+                hasAzureAgentApiKey: Boolean(payload.config.hasAzureAgentApiKey)
               }
             ] as const;
           })
@@ -665,7 +687,13 @@ export function WorkspaceConsole({
           scopes: "",
           tenantId: "",
           environment: "",
-          hasClientSecret: false
+          hasClientSecret: false,
+          azureAgentResponsesUrl: "",
+          azureAgentActivityUrl: "",
+          azureAgentPrincipalId: "",
+          azureAgentTenantId: "",
+          azureAgentApiKey: "",
+          hasAzureAgentApiKey: false
         },
         ...current[id],
         ...patch
@@ -702,7 +730,12 @@ export function WorkspaceConsole({
           redirectUri: configEntry.redirectUri,
           scopes: configEntry.scopes,
           tenantId: configEntry.tenantId,
-          environment: configEntry.environment
+          environment: configEntry.environment,
+          azureAgentResponsesUrl: configEntry.azureAgentResponsesUrl,
+          azureAgentActivityUrl: configEntry.azureAgentActivityUrl,
+          azureAgentPrincipalId: configEntry.azureAgentPrincipalId,
+          azureAgentTenantId: configEntry.azureAgentTenantId,
+          azureAgentApiKey: configEntry.azureAgentApiKey
         })
       });
 
@@ -720,7 +753,13 @@ export function WorkspaceConsole({
         scopes: payload.config?.scopes ?? configEntry.scopes,
         tenantId: payload.config?.tenantId ?? configEntry.tenantId,
         environment: payload.config?.environment ?? configEntry.environment,
-        hasClientSecret: Boolean(payload.config?.hasClientSecret)
+        hasClientSecret: Boolean(payload.config?.hasClientSecret),
+        azureAgentResponsesUrl: payload.config?.azureAgentResponsesUrl ?? configEntry.azureAgentResponsesUrl,
+        azureAgentActivityUrl: payload.config?.azureAgentActivityUrl ?? configEntry.azureAgentActivityUrl,
+        azureAgentPrincipalId: payload.config?.azureAgentPrincipalId ?? configEntry.azureAgentPrincipalId,
+        azureAgentTenantId: payload.config?.azureAgentTenantId ?? configEntry.azureAgentTenantId,
+        azureAgentApiKey: "",
+        hasAzureAgentApiKey: Boolean(payload.config?.hasAzureAgentApiKey)
       });
 
       const connectorName = state.connectors.find((connector) => connector.id === id)?.name ?? id;
@@ -739,6 +778,67 @@ export function WorkspaceConsole({
     }
   }
 
+  async function sendChatMessage() {
+    const trimmed = chatInput.trim();
+    if (!trimmed || chatSending) {
+      return;
+    }
+    if (!session) {
+      router.replace("/auth/login");
+      return;
+    }
+
+    const userMessage: ChatMessage = {
+      id: `${Date.now()}-u-${Math.random().toString(36).slice(2, 6)}`,
+      role: "user",
+      content: trimmed
+    };
+
+    setChatMessages((current) => [...current, userMessage]);
+    setChatInput("");
+    setChatSending(true);
+
+    try {
+      const response = await fetch(`${apiOrigin}/connectors/actionstep/chat`, {
+        method: "POST",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${session.token}`
+        },
+        body: JSON.stringify({
+          message: trimmed,
+          history: chatMessages.map(({ role, content }) => ({ role, content }))
+        })
+      });
+
+      const payload = (await response.json()) as { reply?: string; error?: string; message?: string };
+      if (!response.ok) {
+        throw new Error(payload.message ?? payload.error ?? "Chat request failed.");
+      }
+
+      const reply = payload.reply?.trim();
+      setChatMessages((current) => [
+        ...current,
+        {
+          id: `${Date.now()}-a-${Math.random().toString(36).slice(2, 6)}`,
+          role: "assistant",
+          content: reply && reply.length > 0 ? reply : "(no response)"
+        }
+      ]);
+    } catch (error) {
+      setChatMessages((current) => [
+        ...current,
+        {
+          id: `${Date.now()}-s-${Math.random().toString(36).slice(2, 6)}`,
+          role: "system",
+          content: error instanceof Error ? error.message : "Could not reach the ActionStep agent."
+        }
+      ]);
+    } finally {
+      setChatSending(false);
+    }
+  }
+
   const selected = state.connectors.find((connector) => connector.id === selectedConnector) ?? state.connectors[0];
   const canManageTenants = hasPlatformConsoleAccess(session);
   const selectedConfig = connectorConfigs[selected.id] ?? {
@@ -750,8 +850,266 @@ export function WorkspaceConsole({
     scopes: "",
     tenantId: "",
     environment: "",
-    hasClientSecret: false
+    hasClientSecret: false,
+    azureAgentResponsesUrl: "",
+    azureAgentActivityUrl: "",
+    azureAgentPrincipalId: "",
+    azureAgentTenantId: "",
+    azureAgentApiKey: "",
+    hasAzureAgentApiKey: false
   };
+
+  if (mode === "detail" && selected.id === "actionstep") {
+    return (
+      <div className="stack">
+        {notice ? <div className="notice">{notice}</div> : null}
+        <article className="panel stack connector-catalog-panel">
+          <div className="section-heading">
+            <div className="breadcrumb">
+              <button className="button secondary" onClick={() => router.push("/dashboard/connectors")} type="button">
+                ← Connectors
+              </button>
+            </div>
+            <span className={`status-pill ${selected.status.toLowerCase().replace(/\s+/g, "-")}`}>{selected.status}</span>
+          </div>
+          <div className="connector-hero">
+            <div className="connector-brand-row">
+              <span className={`connector-logo connector-logo-${selected.accent}`}>
+                <img src={selected.logoUrl} alt={`${selected.name} logo`} className="connector-logo-image" />
+              </span>
+              <div>
+                <span className="eyebrow">Legal practice management</span>
+                <h2>{selected.name}</h2>
+                <p className="muted">Matters, participants, tasks, time entries, and a smart assistant for your firm.</p>
+              </div>
+            </div>
+            {selected.status === "Connected" ? (
+              <button className="button secondary" onClick={() => void disconnectConnector(selected.id)} type="button">
+                Disconnect
+              </button>
+            ) : (
+              <button className="button primary" onClick={() => void connectConnector(selected.id)} type="button">
+                Connect ActionStep
+              </button>
+            )}
+          </div>
+
+          <div className="tabs">
+            <button
+              className={`tab ${actionstepTab === "overview" ? "active" : ""}`}
+              onClick={() => setActionstepTab("overview")}
+              type="button"
+            >
+              Overview
+            </button>
+            <button
+              className={`tab ${actionstepTab === "chat" ? "active" : ""}`}
+              onClick={() => setActionstepTab("chat")}
+              type="button"
+            >
+              Chat
+            </button>
+            <button
+              className={`tab ${actionstepTab === "settings" ? "active" : ""}`}
+              onClick={() => setActionstepTab("settings")}
+              type="button"
+            >
+              Settings
+            </button>
+          </div>
+
+          {actionstepTab === "overview" ? (
+            <div className="setup-card stack">
+              <div>
+                <span className="eyebrow">What you get</span>
+                <p>
+                  Pull live context from your firm&apos;s ActionStep workspace and put it in front of your team and AI assistants — without
+                  copy/paste or jumping between tabs.
+                </p>
+              </div>
+              <div className="tool-grid">
+                {selected.tools.map((tool) => (
+                  <span key={tool} className="tool-pill">
+                    {tool.replace(/_/g, " ")}
+                  </span>
+                ))}
+              </div>
+              <p className="connector-meta">Last activity: {selected.lastSync}</p>
+              {selected.lastError ? <p className="danger-text">{selected.lastError}</p> : null}
+            </div>
+          ) : null}
+
+          {actionstepTab === "chat" ? (
+            <div className="chat-shell">
+              <div className="chat-log">
+                {chatMessages.length === 0 ? (
+                  <div className="chat-empty">
+                    Ask the ActionStep assistant about a matter, participant, or open task.
+                  </div>
+                ) : (
+                  chatMessages.map((message) => (
+                    <div key={message.id} className={`chat-message ${message.role}`}>
+                      {message.content}
+                    </div>
+                  ))
+                )}
+                {chatSending ? <div className="chat-message system">Thinking…</div> : null}
+              </div>
+              <div className="chat-composer">
+                <textarea
+                  value={chatInput}
+                  onChange={(event) => setChatInput(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" && !event.shiftKey) {
+                      event.preventDefault();
+                      void sendChatMessage();
+                    }
+                  }}
+                  placeholder="Ask about a matter, task, or participant…"
+                  disabled={chatSending}
+                />
+                <button
+                  className="button primary"
+                  onClick={() => void sendChatMessage()}
+                  type="button"
+                  disabled={chatSending || !chatInput.trim()}
+                >
+                  {chatSending ? "Sending…" : "Send"}
+                </button>
+              </div>
+            </div>
+          ) : null}
+
+          {actionstepTab === "settings" ? (
+            <div className="stack">
+              <div className="settings-section stack">
+                <div className="settings-section-header">ActionStep connection</div>
+                <p className="muted">Used when your team starts the ActionStep OAuth flow. Shared across everyone in {state.workspaceName}.</p>
+                <div className="field-grid">
+                  <label className="stack">
+                    <span className="field-label">Environment</span>
+                    <select
+                      value={selectedConfig.environment === "staging" ? "staging" : "production"}
+                      onChange={(event) => updateConnectorConfig(selected.id, { environment: event.target.value })}
+                    >
+                      <option value="production">Production (go.actionstep.com)</option>
+                      <option value="staging">Staging (go.actionstepstaging.com)</option>
+                    </select>
+                  </label>
+                  <label className="stack">
+                    <span className="field-label">Client ID</span>
+                    <input
+                      value={selectedConfig.clientId}
+                      onChange={(event) => updateConnectorConfig(selected.id, { clientId: event.target.value })}
+                      placeholder="Application client ID"
+                    />
+                  </label>
+                  <label className="stack">
+                    <span className="field-label">Redirect URI</span>
+                    <input
+                      value={selectedConfig.redirectUri}
+                      onChange={(event) => updateConnectorConfig(selected.id, { redirectUri: event.target.value })}
+                      placeholder="https://api.example.com/oauth/actionstep/callback"
+                    />
+                  </label>
+                  <label className="stack">
+                    <span className="field-label">Scopes</span>
+                    <input
+                      value={selectedConfig.scopes}
+                      onChange={(event) => updateConnectorConfig(selected.id, { scopes: event.target.value })}
+                      placeholder="actions participants tasks timeentries"
+                    />
+                  </label>
+                </div>
+                <label className="stack">
+                  <span className="field-label">Client secret</span>
+                  <input
+                    type="password"
+                    value={selectedConfig.clientSecret}
+                    onChange={(event) => updateConnectorConfig(selected.id, { clientSecret: event.target.value })}
+                    placeholder={
+                      selectedConfig.hasClientSecret
+                        ? "Saved already. Enter a new secret to replace it."
+                        : "Enter the client secret"
+                    }
+                  />
+                  <span className="connector-meta">
+                    {selectedConfig.hasClientSecret ? "A secret is already saved." : "No secret saved yet."}
+                  </span>
+                </label>
+              </div>
+
+              <div className="settings-section stack">
+                <div className="settings-section-header">Azure Foundry agent</div>
+                <p className="muted">Powers the Chat tab. Get these values from the Agent application details page in Azure AI Foundry.</p>
+                <div className="field-grid">
+                  <label className="stack">
+                    <span className="field-label">Responses endpoint</span>
+                    <input
+                      value={selectedConfig.azureAgentResponsesUrl ?? ""}
+                      onChange={(event) => updateConnectorConfig(selected.id, { azureAgentResponsesUrl: event.target.value })}
+                      placeholder="https://…/protocols/openai/responses?api-version=…"
+                    />
+                  </label>
+                  <label className="stack">
+                    <span className="field-label">Activity protocol endpoint</span>
+                    <input
+                      value={selectedConfig.azureAgentActivityUrl ?? ""}
+                      onChange={(event) => updateConnectorConfig(selected.id, { azureAgentActivityUrl: event.target.value })}
+                      placeholder="https://…/protocols/activityprotocol?api-version=…"
+                    />
+                  </label>
+                  <label className="stack">
+                    <span className="field-label">Principal ID</span>
+                    <input
+                      value={selectedConfig.azureAgentPrincipalId ?? ""}
+                      onChange={(event) => updateConnectorConfig(selected.id, { azureAgentPrincipalId: event.target.value })}
+                      placeholder="Agent principal (object) ID"
+                    />
+                  </label>
+                  <label className="stack">
+                    <span className="field-label">Azure tenant ID</span>
+                    <input
+                      value={selectedConfig.azureAgentTenantId ?? ""}
+                      onChange={(event) => updateConnectorConfig(selected.id, { azureAgentTenantId: event.target.value })}
+                      placeholder="Entra tenant ID"
+                    />
+                  </label>
+                </div>
+                <label className="stack">
+                  <span className="field-label">API key or access token</span>
+                  <input
+                    type="password"
+                    value={selectedConfig.azureAgentApiKey ?? ""}
+                    onChange={(event) => updateConnectorConfig(selected.id, { azureAgentApiKey: event.target.value })}
+                    placeholder={
+                      selectedConfig.hasAzureAgentApiKey
+                        ? "Saved already. Enter a new key to replace it."
+                        : "API key or bearer token for the Responses endpoint"
+                    }
+                  />
+                  <span className="connector-meta">
+                    {selectedConfig.hasAzureAgentApiKey ? "A key is already saved." : "No key saved yet."}
+                  </span>
+                </label>
+              </div>
+
+              <div className="row">
+                <button
+                  className="button primary"
+                  onClick={() => void saveConnectorConfig(selected.id)}
+                  type="button"
+                  disabled={savingConfigId === selected.id}
+                >
+                  {savingConfigId === selected.id ? "Saving…" : "Save settings"}
+                </button>
+              </div>
+            </div>
+          ) : null}
+        </article>
+      </div>
+    );
+  }
 
   if (mode === "detail") {
     return (
@@ -787,9 +1145,7 @@ export function WorkspaceConsole({
                 ? "Live MCP tools: customer lookup, ticketing, action history, project search, contacts, documents, site devices, invoices, and guarded writes."
                 : selected.id === "n8n"
                   ? "n8n is set up for workflow catalog, execution lookups, and webhook-triggered automation runs across linked boxes."
-                  : selected.id === "actionstep"
-                    ? "ActionStep tools: matters (actions), participants, tasks, and time entries. The regional API endpoint is discovered automatically from the OAuth token response."
-                    : "Configuration is stored per tenant so each customer can have its own connector settings."}
+                  : "Configuration is stored per tenant so each customer can have its own connector settings."}
             </p>
             <p className="connector-meta">
               Shared app settings are loaded tenant-wide. Each user still completes their own OAuth consent and gets their own connected account token.
