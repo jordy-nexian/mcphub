@@ -984,9 +984,9 @@ type HaloFetchInit = RequestInit & {
   timeoutMs?: number;
 };
 
-const HALO_DEFAULT_TIMEOUT_MS = Number(process.env.HALO_TIMEOUT_MS) || 8_000;
-const HALO_DEFAULT_RETRIES = Number(process.env.HALO_MAX_RETRIES) || 2;
-const HALO_RETRY_BASE_MS = 200;
+const HALO_DEFAULT_TIMEOUT_MS = Number(process.env.HALO_TIMEOUT_MS) || 15_000;
+const HALO_DEFAULT_RETRIES = Number(process.env.HALO_MAX_RETRIES) || 3;
+const HALO_RETRY_BASE_MS = 300;
 
 function isHaloRetryableStatus(status: number) {
   return status === 408 || status === 425 || status === 429 || status >= 500;
@@ -2303,11 +2303,12 @@ export class ConnectorService {
       filters?: Record<string, unknown>;
     }
   ) {
-    const pageSize = Math.min(Math.max(options.limit, 50), 200);
+    const requestedPageSize = Math.min(Math.max(options.limit, 25), 100);
+    let pageSize = requestedPageSize;
     const maxResults = options.limit;
     const collected: HaloTicketRecord[] = [];
 
-    for (let page = 1; page <= 10 && collected.length < maxResults; page += 1) {
+    for (let page = 1; page <= 20 && collected.length < maxResults; page += 1) {
       const url = new URL(`${baseUrl}/api/tickets`);
       const filters = options.filters ?? {};
       appendQueryValue(url, "count", pageSize);
@@ -2395,8 +2396,17 @@ export class ConnectorService {
       });
 
       if (!response.ok) {
-        const body = await response.text();
-        throw new Error(`HaloPSA tickets request failed (${response.status}): ${body}`);
+        const body = (await response.text()).trim();
+        // Halo intermittently 500s on broader pages; halve the page size and retry once before bubbling up.
+        if (response.status >= 500 && pageSize > 25) {
+          pageSize = Math.max(25, Math.floor(pageSize / 2));
+          page -= 1;
+          continue;
+        }
+        const friendly = body.length > 0 ? body.slice(0, 500) : "<empty body>";
+        throw new Error(
+          `HaloPSA tickets request failed (${response.status}) on ${url.pathname}?${url.searchParams.toString()}: ${friendly}`
+        );
       }
 
       const payload = (await response.json()) as unknown;
