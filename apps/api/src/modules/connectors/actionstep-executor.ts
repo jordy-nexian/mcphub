@@ -11,13 +11,13 @@ const SOURCE = "actionstep";
 
 function getApiEndpoint(account: ConnectedAccountRecord): string {
   const metadata = (account.metadataJson ?? {}) as { apiEndpoint?: string };
-  const endpoint = metadata.apiEndpoint?.replace(/\/$/, "");
-  if (!endpoint) {
+  const raw = metadata.apiEndpoint?.trim();
+  if (!raw) {
     throw new Error(
       "ActionStep account is missing the api_endpoint metadata — reconnect the account to capture it."
     );
   }
-  return endpoint;
+  return raw.replace(/\/+$/, "").replace(/\/api(?:\/rest)?$/i, "");
 }
 
 function readString(input: Record<string, unknown>, key: string): string | undefined {
