@@ -259,6 +259,21 @@ export async function ensureDatabaseSchema() {
           ('hubspot', 'mod_workflow')
         ON CONFLICT (provider) DO NOTHING;
       `);
+
+      await pool.query(`
+        CREATE TABLE IF NOT EXISTS tool_policies (
+          tenant_id TEXT NOT NULL,
+          tool_name TEXT NOT NULL,
+          enabled BOOLEAN NOT NULL,
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          PRIMARY KEY (tenant_id, tool_name)
+        );
+      `);
+
+      await pool.query(`
+        CREATE INDEX IF NOT EXISTS tool_policies_tenant_idx
+        ON tool_policies (tenant_id);
+      `);
     })();
   }
 

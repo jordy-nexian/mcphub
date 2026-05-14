@@ -88,6 +88,25 @@ async function executeTool(auth: AuthContext, name: string, input: Record<string
   return payload.result;
 }
 
+async function getDisabledToolsForTenant(tenantId: string): Promise<Set<string>> {
+  try {
+    const response = await fetch(
+      `${process.env.API_URL ?? "http://localhost:4000"}/internal/mcp/tool-policies?tenantId=${encodeURIComponent(tenantId)}`,
+      {
+        headers: {
+          "x-internal-mcp-secret": process.env.INTERNAL_MCP_SHARED_SECRET ?? jwtSecret
+        }
+      }
+    );
+    if (!response.ok) return new Set();
+    const payload = (await response.json()) as { disabledTools: string[] };
+    return new Set(payload.disabledTools ?? []);
+  } catch (error) {
+    app.log.warn({ err: error }, "Failed to fetch tool policies — exposing full catalog");
+    return new Set();
+  }
+}
+
 function buildToolCallResult(output: NormalizedToolResponse) {
   const preview =
     output.data.length > 0
@@ -189,9 +208,11 @@ function registerMcpHttpEndpoint(path: string) {
 
       if (rpc.method === "tools/list") {
         toolsListParamsSchema.parse(rpc.params ?? {});
+        const disabled = await getDisabledToolsForTenant(auth.tenantId);
+        const filteredCatalog = disabled.size === 0 ? toolCatalog : toolCatalog.filter((tool) => !disabled.has(tool.name));
         return reply.send(
           jsonRpcResult(rpc.id, {
-            tools: toolCatalog
+            tools: filteredCatalog
           })
         );
       }

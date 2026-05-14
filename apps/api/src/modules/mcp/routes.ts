@@ -10,6 +10,7 @@ import type { AuthService, PlatformAuthContext } from "../auth/auth.service";
 import type { ConnectorService } from "../connectors/connector.service";
 import type { ModuleService } from "../modules/module.service";
 import type { PlatformService } from "../platform/platform.service";
+import type { ToolPolicyService } from "../policies/tool-policy.service";
 
 const oauthQuerySchema = z.object({
   tenantId: z.string().min(1),
@@ -286,6 +287,7 @@ export function registerApiRoutes(
     connectorService: ConnectorService;
     auditService: AuditService;
     moduleService: ModuleService;
+    toolPolicyService: ToolPolicyService;
     platformService: PlatformService;
     config: {
       apiUrl: string;
@@ -734,6 +736,81 @@ export function registerApiRoutes(
     );
 
     return { result };
+  });
+
+  app.get("/internal/mcp/tool-policies", async (request, reply) => {
+    const secret = request.headers["x-internal-mcp-secret"];
+    if (secret !== deps.config.internalMcpSharedSecret) {
+      return reply.status(401).send({ error: "unauthorized" });
+    }
+
+    const query = z.object({ tenantId: z.string().min(1) }).parse(request.query);
+    const disabled = await deps.toolPolicyService.getDisabledToolsForTenant(query.tenantId);
+    return { disabledTools: [...disabled] };
+  });
+
+  app.get("/tool-policies", async (request, reply) => {
+    const auth = parsePlatformAuth(request.headers.authorization, deps.authService);
+    if (!auth) {
+      return reply.status(401).send({ error: "unauthorized" });
+    }
+
+    const [providers, policies] = await Promise.all([
+      deps.connectorService.getProviders(auth.tenantId, auth.userId),
+      deps.toolPolicyService.listForTenant(auth.tenantId)
+    ]);
+    const policyByTool = new Map(policies.map((p) => [p.toolName, p]));
+
+    const tools = providers.flatMap((provider) =>
+      (provider.toolDefinitions ?? []).map((tool) => {
+        const policy = policyByTool.get(tool.name);
+        return {
+          provider: provider.displayName,
+          name: tool.name,
+          description: tool.description ?? "",
+          enabled: policy ? policy.enabled : true,
+          isOverride: Boolean(policy),
+          updatedAt: policy?.updatedAt
+        };
+      })
+    );
+
+    return { tools };
+  });
+
+  app.put("/tool-policies/:toolName", async (request, reply) => {
+    const auth = parsePlatformAuth(request.headers.authorization, deps.authService);
+    if (!auth) {
+      return reply.status(401).send({ error: "unauthorized" });
+    }
+
+    const params = z.object({ toolName: z.string().min(1) }).parse(request.params);
+    const body = z.object({ enabled: z.boolean() }).parse(request.body);
+
+    const policy = await deps.toolPolicyService.setToolEnabled({
+      actorTenantId: auth.tenantId,
+      actorUserId: auth.userId,
+      tenantId: auth.tenantId,
+      toolName: params.toolName,
+      enabled: body.enabled
+    });
+    return { policy };
+  });
+
+  app.delete("/tool-policies/:toolName", async (request, reply) => {
+    const auth = parsePlatformAuth(request.headers.authorization, deps.authService);
+    if (!auth) {
+      return reply.status(401).send({ error: "unauthorized" });
+    }
+
+    const params = z.object({ toolName: z.string().min(1) }).parse(request.params);
+    await deps.toolPolicyService.clearTool({
+      actorTenantId: auth.tenantId,
+      actorUserId: auth.userId,
+      tenantId: auth.tenantId,
+      toolName: params.toolName
+    });
+    return reply.status(204).send();
   });
 
   app.get("/platform/overview", async (request, reply) => {

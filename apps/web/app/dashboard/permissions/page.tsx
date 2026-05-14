@@ -1,8 +1,10 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 
 import { PageHeader } from "../../../components/page-header";
+import { readPlatformSession, type PlatformSession } from "../../../lib/platform-auth";
 
 const productionGuardrails = [
   "Connector access is scoped per user and tenant.",
@@ -11,55 +13,145 @@ const productionGuardrails = [
   "Write actions remain explicitly constrained to guarded tools such as draft ticket creation and internal notes."
 ];
 
-const defaultToolPolicies = [
-  { tool: "find_customer", roles: "Owner, Admin, Analyst, User", enabled: true },
-  { tool: "get_customer_overview", roles: "Owner, Admin, Analyst, User", enabled: true },
-  { tool: "list_open_tickets", roles: "Owner, Admin, Analyst, User", enabled: true },
-  { tool: "get_ticket_with_actions", roles: "Owner, Admin, Analyst, User", enabled: true },
-  { tool: "get_recent_invoices", roles: "Owner, Admin", enabled: true },
-  { tool: "create_draft_ticket", roles: "Owner, Admin", enabled: true },
-  { tool: "add_internal_note", roles: "Owner, Admin", enabled: false },
-  { tool: "list_workflows", roles: "Owner, Admin, Analyst", enabled: true },
-  { tool: "trigger_webhook", roles: "Owner, Admin", enabled: true }
-];
-
-const storageKey = "nexian-tool-policies";
+type ToolRow = {
+  provider: string;
+  name: string;
+  description: string;
+  enabled: boolean;
+  isOverride: boolean;
+  updatedAt?: string;
+};
 
 export default function PermissionsPage() {
-  const [toolPolicies, setToolPolicies] = useState(defaultToolPolicies);
+  const router = useRouter();
+  const [session, setSession] = useState<PlatformSession | null>(null);
+  const [tools, setTools] = useState<ToolRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [savingTool, setSavingTool] = useState<string>("");
+  const [notice, setNotice] = useState("");
 
-  useEffect(() => {
-    const stored = window.localStorage.getItem(storageKey);
-    if (!stored) {
-      return;
+  const apiOrigin = useMemo(() => {
+    if (typeof window === "undefined") {
+      return process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
     }
-
-    try {
-      const parsed = JSON.parse(stored) as typeof defaultToolPolicies;
-      if (Array.isArray(parsed)) {
-        setToolPolicies(parsed);
-      }
-    } catch {
-      // Keep defaults if local storage is invalid.
-    }
+    return process.env.NEXT_PUBLIC_API_URL ?? window.location.origin.replace(":3000", ":4000");
   }, []);
 
   useEffect(() => {
-    window.localStorage.setItem(storageKey, JSON.stringify(toolPolicies));
-  }, [toolPolicies]);
+    const storedSession = readPlatformSession();
+    if (!storedSession) {
+      router.replace("/auth/login");
+      return;
+    }
+    setSession(storedSession);
+  }, [router]);
 
-  function togglePolicy(tool: string) {
-    setToolPolicies((current) =>
-      current.map((policy) => (policy.tool === tool ? { ...policy, enabled: !policy.enabled } : policy))
+  useEffect(() => {
+    if (!session) return;
+
+    let cancelled = false;
+    async function loadPolicies() {
+      setLoading(true);
+      setNotice("");
+      try {
+        const response = await fetch(`${apiOrigin}/tool-policies`, {
+          headers: { authorization: `Bearer ${session!.token}` }
+        });
+        if (!response.ok) {
+          throw new Error(`Failed to load tool policies (${response.status})`);
+        }
+        const payload = (await response.json()) as { tools: ToolRow[] };
+        if (!cancelled) {
+          setTools(payload.tools);
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setNotice(error instanceof Error ? error.message : "Could not load tool policies.");
+        }
+      } finally {
+        if (!cancelled) {
+          setLoading(false);
+        }
+      }
+    }
+
+    void loadPolicies();
+    return () => {
+      cancelled = true;
+    };
+  }, [session, apiOrigin]);
+
+  async function togglePolicy(tool: ToolRow) {
+    if (!session) return;
+    const nextEnabled = !tool.enabled;
+    setSavingTool(tool.name);
+    setNotice("");
+
+    setTools((current) =>
+      current.map((row) => (row.name === tool.name ? { ...row, enabled: nextEnabled, isOverride: true } : row))
     );
+
+    try {
+      const response = await fetch(`${apiOrigin}/tool-policies/${encodeURIComponent(tool.name)}`, {
+        method: "PUT",
+        headers: {
+          "content-type": "application/json",
+          authorization: `Bearer ${session.token}`
+        },
+        body: JSON.stringify({ enabled: nextEnabled })
+      });
+      if (!response.ok) {
+        throw new Error(`Failed to update ${tool.name} (${response.status})`);
+      }
+    } catch (error) {
+      setTools((current) =>
+        current.map((row) => (row.name === tool.name ? { ...row, enabled: tool.enabled, isOverride: tool.isOverride } : row))
+      );
+      setNotice(error instanceof Error ? error.message : `Could not update ${tool.name}.`);
+    } finally {
+      setSavingTool("");
+    }
   }
+
+  async function resetPolicy(tool: ToolRow) {
+    if (!session || !tool.isOverride) return;
+    setSavingTool(tool.name);
+    setNotice("");
+
+    try {
+      const response = await fetch(`${apiOrigin}/tool-policies/${encodeURIComponent(tool.name)}`, {
+        method: "DELETE",
+        headers: { authorization: `Bearer ${session.token}` }
+      });
+      if (!response.ok && response.status !== 204) {
+        throw new Error(`Failed to reset ${tool.name} (${response.status})`);
+      }
+      setTools((current) =>
+        current.map((row) => (row.name === tool.name ? { ...row, enabled: true, isOverride: false, updatedAt: undefined } : row))
+      );
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : `Could not reset ${tool.name}.`);
+    } finally {
+      setSavingTool("");
+    }
+  }
+
+  const grouped = useMemo(() => {
+    const map = new Map<string, ToolRow[]>();
+    for (const tool of tools) {
+      const list = map.get(tool.provider) ?? [];
+      list.push(tool);
+      map.set(tool.provider, list);
+    }
+    return [...map.entries()].sort(([a], [b]) => a.localeCompare(b));
+  }, [tools]);
 
   return (
     <div className="stack">
       <PageHeader
         eyebrow="Guardrails"
         title="Tool permissions"
-        description="Production guardrails are enforced in the platform API and MCP layers. Use the policy toggles below to model which tools should be enabled for this workspace."
+        description="Production guardrails are enforced in the platform API and MCP layers. Use the policy toggles below to enable or disable individual tools for this workspace — disabled tools are hidden from MCP clients and rejected at execution."
       />
 
       <div className="permission-list">
@@ -74,31 +166,56 @@ export default function PermissionsPage() {
         ))}
       </div>
 
-      <div className="stack">
-        <PageHeader
-          eyebrow="Tool Matrix"
-          title="Connector guardrails"
-          description="Toggle the default MCP tool exposure for this workspace. These switches currently persist in the portal and are ready to be wired to the live policy backend next."
-        />
-        <div className="permission-list">
-          {toolPolicies.map((policy) => (
-            <label key={policy.tool} className="permission-item">
-              <div>
-                <strong>{policy.tool}</strong>
-                <p>{policy.roles}</p>
-              </div>
-              <button
-                className={`toggle ${policy.enabled ? "enabled" : ""}`}
-                onClick={() => togglePolicy(policy.tool)}
-                type="button"
-                aria-pressed={policy.enabled}
-              >
-                <span />
-              </button>
-            </label>
-          ))}
-        </div>
-      </div>
+      {notice ? <div className="notice">{notice}</div> : null}
+
+      {loading ? (
+        <div className="muted">Loading tool catalog…</div>
+      ) : grouped.length === 0 ? (
+        <div className="muted">No tools available for this tenant. Enable a module on the connectors page first.</div>
+      ) : (
+        grouped.map(([provider, providerTools]) => (
+          <div key={provider} className="stack">
+            <PageHeader
+              eyebrow={provider}
+              title={`${provider} tools`}
+              description={`Toggle which ${provider} tools are exposed to MCP clients for this workspace. Disabled tools are hidden from tools/list and rejected at execution.`}
+            />
+            <div className="permission-list">
+              {providerTools.map((tool) => (
+                <label key={tool.name} className="permission-item">
+                  <div>
+                    <strong>{tool.name}</strong>
+                    <p>{tool.description}</p>
+                    {tool.isOverride ? (
+                      <p className="muted">
+                        Override active{tool.updatedAt ? ` · ${new Date(tool.updatedAt).toLocaleString()}` : ""}
+                        {" — "}
+                        <button
+                          type="button"
+                          className="link"
+                          onClick={() => void resetPolicy(tool)}
+                          disabled={savingTool === tool.name}
+                        >
+                          reset to default
+                        </button>
+                      </p>
+                    ) : null}
+                  </div>
+                  <button
+                    className={`toggle ${tool.enabled ? "enabled" : ""}`}
+                    onClick={() => void togglePolicy(tool)}
+                    type="button"
+                    aria-pressed={tool.enabled}
+                    disabled={savingTool === tool.name}
+                  >
+                    <span />
+                  </button>
+                </label>
+              ))}
+            </div>
+          </div>
+        ))
+      )}
     </div>
   );
 }

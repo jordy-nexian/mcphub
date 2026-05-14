@@ -165,11 +165,14 @@ const initialState: DemoState = {
         "list_matters",
         "search_matters",
         "get_matter",
+        "get_matter_summary",
         "list_participants",
         "search_participants",
         "get_participant",
         "list_tasks_for_matter",
-        "list_time_entries"
+        "list_time_entries",
+        "list_file_notes",
+        "list_matter_emails"
       ],
       realOAuth: true,
       logoUrl: "https://www.actionstep.com/wp-content/uploads/2021/02/Actionstep_Logo_RGB.png",

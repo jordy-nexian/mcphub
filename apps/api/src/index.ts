@@ -9,6 +9,7 @@ import { ConnectorService } from "./modules/connectors/connector.service";
 import { registerApiRoutes } from "./modules/mcp/routes";
 import { ModuleService } from "./modules/modules/module.service";
 import { PlatformService } from "./modules/platform/platform.service";
+import { ToolPolicyService } from "./modules/policies/tool-policy.service";
 
 const config = buildAppConfig();
 const app = Fastify({ logger: true });
@@ -30,7 +31,8 @@ app.addContentTypeParser(
 const auditService = new AuditService();
 const authService = new AuthService();
 const moduleService = new ModuleService(auditService);
-const connectorService = new ConnectorService(auditService, moduleService);
+const toolPolicyService = new ToolPolicyService(auditService);
+const connectorService = new ConnectorService(auditService, moduleService, toolPolicyService);
 const platformService = new PlatformService(auditService);
 
 registerApiRoutes(app, {
@@ -38,6 +40,7 @@ registerApiRoutes(app, {
   connectorService,
   auditService,
   moduleService,
+  toolPolicyService,
   platformService,
   config
 });

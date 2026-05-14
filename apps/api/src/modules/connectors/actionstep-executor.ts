@@ -113,6 +113,215 @@ function pagination(input: Record<string, unknown>) {
   };
 }
 
+function isFullPayload(input: Record<string, unknown>): boolean {
+  const value = input["include_full"];
+  if (typeof value === "boolean") return value;
+  if (typeof value === "string") return value.toLowerCase() === "true";
+  return false;
+}
+
+function pickFields(record: Record<string, unknown>, keys: readonly string[]): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const key of keys) {
+    const value = record[key];
+    if (value === null || value === undefined || value === "") continue;
+    out[key] = value;
+  }
+  return out;
+}
+
+function pickLinkFields(record: Record<string, unknown>, keys: readonly string[]): Record<string, unknown> {
+  const links = record.links;
+  if (!links || typeof links !== "object" || Array.isArray(links)) return {};
+  return pickFields(links as Record<string, unknown>, keys);
+}
+
+function truncate(value: unknown, max = 500): unknown {
+  if (typeof value !== "string") return value;
+  if (value.length <= max) return value;
+  return `${value.slice(0, max)}…(truncated)`;
+}
+
+function wrapWildcard(value: string): string {
+  const trimmed = value.trim();
+  if (!trimmed) return trimmed;
+  return trimmed.includes("*") ? trimmed : `*${trimmed}*`;
+}
+
+function normalizeDigits(value: unknown): string {
+  if (value === null || value === undefined) return "";
+  if (typeof value !== "string" && typeof value !== "number") return "";
+  return String(value).replace(/\D/g, "");
+}
+
+function participantMatchesPhone(participant: Record<string, unknown>, queryDigits: string): boolean {
+  if (!queryDigits) return true;
+  for (let slot = 1; slot <= 4; slot++) {
+    const country = normalizeDigits(participant[`phone${slot}Country`]);
+    const area = normalizeDigits(participant[`phone${slot}Area`]);
+    const number = normalizeDigits(participant[`phone${slot}Number`]);
+    if (!number && !area && !country) continue;
+    const combined = `${country}${area}${number}`;
+    if (combined.includes(queryDigits)) return true;
+    if (number && number.includes(queryDigits)) return true;
+  }
+  return false;
+}
+
+const MATTER_FIELDS = [
+  "id",
+  "name",
+  "reference",
+  "status",
+  "priority",
+  "isBillable",
+  "dueTimestamp",
+  "lastActivityTimestamp",
+  "createdTimestamp",
+  "modifiedTimestamp"
+] as const;
+
+const MATTER_LINK_FIELDS = ["actionType", "assignedTo", "primaryParticipants", "step"] as const;
+
+function slimMatter(record: Record<string, unknown>): Record<string, unknown> {
+  return {
+    ...pickFields(record, MATTER_FIELDS),
+    links: pickLinkFields(record, MATTER_LINK_FIELDS)
+  };
+}
+
+const PARTICIPANT_FIELDS = [
+  "id",
+  "displayName",
+  "firstName",
+  "lastName",
+  "companyName",
+  "isCompany",
+  "email",
+  "salutation",
+  "phone1Label",
+  "phone1Country",
+  "phone1Area",
+  "phone1Number",
+  "phone2Label",
+  "phone2Country",
+  "phone2Area",
+  "phone2Number",
+  "phone3Label",
+  "phone3Country",
+  "phone3Area",
+  "phone3Number",
+  "phone4Label",
+  "phone4Country",
+  "phone4Area",
+  "phone4Number"
+] as const;
+
+const PARTICIPANT_LINK_FIELDS = ["participantType"] as const;
+
+function slimParticipant(record: Record<string, unknown>): Record<string, unknown> {
+  return {
+    ...pickFields(record, PARTICIPANT_FIELDS),
+    links: pickLinkFields(record, PARTICIPANT_LINK_FIELDS)
+  };
+}
+
+const TASK_FIELDS = [
+  "id",
+  "name",
+  "description",
+  "status",
+  "priority",
+  "dueTimestamp",
+  "completedTimestamp",
+  "createdTimestamp"
+] as const;
+
+const TASK_LINK_FIELDS = ["action", "assignee", "createdBy"] as const;
+
+function slimTask(record: Record<string, unknown>): Record<string, unknown> {
+  return {
+    ...pickFields(record, TASK_FIELDS),
+    description: truncate(record.description, 400),
+    links: pickLinkFields(record, TASK_LINK_FIELDS)
+  };
+}
+
+const TIMERECORD_FIELDS = [
+  "id",
+  "date",
+  "duration",
+  "units",
+  "rate",
+  "billableValue",
+  "notes",
+  "narrative",
+  "description"
+] as const;
+
+const TIMERECORD_LINK_FIELDS = ["action", "participant", "activity", "user"] as const;
+
+function slimTimeRecord(record: Record<string, unknown>): Record<string, unknown> {
+  const base = pickFields(record, TIMERECORD_FIELDS);
+  return {
+    ...base,
+    notes: truncate(base.notes, 400),
+    narrative: truncate(base.narrative, 400),
+    description: truncate(base.description, 400),
+    links: pickLinkFields(record, TIMERECORD_LINK_FIELDS)
+  };
+}
+
+const FILENOTE_FIELDS = [
+  "id",
+  "text",
+  "note",
+  "subject",
+  "enteredTimestamp",
+  "noteTimestamp",
+  "createdTimestamp"
+] as const;
+
+const FILENOTE_LINK_FIELDS = ["action", "enteredBy", "participant"] as const;
+
+function slimFileNote(record: Record<string, unknown>): Record<string, unknown> {
+  const base = pickFields(record, FILENOTE_FIELDS);
+  return {
+    ...base,
+    text: truncate(base.text, 800),
+    note: truncate(base.note, 800),
+    links: pickLinkFields(record, FILENOTE_LINK_FIELDS)
+  };
+}
+
+const EMAIL_FIELDS = [
+  "id",
+  "subject",
+  "fromAddress",
+  "fromName",
+  "toAddresses",
+  "ccAddresses",
+  "sentTimestamp",
+  "receivedTimestamp",
+  "direction",
+  "summary",
+  "body",
+  "textBody"
+] as const;
+
+const EMAIL_LINK_FIELDS = ["action", "fromParticipant", "toParticipants"] as const;
+
+function slimEmail(record: Record<string, unknown>): Record<string, unknown> {
+  const base = pickFields(record, EMAIL_FIELDS);
+  return {
+    ...base,
+    body: truncate(base.body, 600),
+    textBody: truncate(base.textBody, 600),
+    summary: truncate(base.summary, 600),
+    links: pickLinkFields(record, EMAIL_LINK_FIELDS)
+  };
+}
+
 async function listActions(
   deps: ActionStepExecutorDeps,
   account: ConnectedAccountRecord,
@@ -120,19 +329,63 @@ async function listActions(
 ): Promise<NormalizedToolResponse> {
   const endpoint = getApiEndpoint(account);
   const { page, pageSize } = pagination(input);
-  const url = buildUrl(endpoint, "/api/rest/actions", {
-    page,
-    pageSize,
-    name: readString(input, "query"),
+  const rawQuery = readString(input, "query");
+  const rawDescription = readString(input, "description");
+  const rawReference = readString(input, "reference");
+  const sharedFilters = {
     status: readString(input, "status"),
     assignedTo: readNumber(input, "assigned_to_participant_id"),
     primaryParticipant: readNumber(input, "client_participant_id")
-  });
-  const { payload } = await fetchWithRefresh(deps, account, url);
-  const actions = pickCollection(payload, "actions");
+  };
+
+  let actions: Record<string, unknown>[];
+
+  if (rawQuery && !rawDescription && !rawReference) {
+    const wildcardQuery = wrapWildcard(rawQuery);
+    const fanOutFields = ["name", "reference", "description"] as const;
+    const slotResponses = await Promise.allSettled(
+      fanOutFields.map((field) =>
+        fetchWithRefresh(
+          deps,
+          account,
+          buildUrl(endpoint, "/api/rest/actions", {
+            pageSize,
+            [field]: wildcardQuery,
+            ...sharedFilters
+          })
+        )
+      )
+    );
+
+    const merged = new Map<string, Record<string, unknown>>();
+    for (const result of slotResponses) {
+      if (result.status !== "fulfilled") continue;
+      for (const action of pickCollection(result.value.payload, "actions")) {
+        const id = action.id !== undefined ? String(action.id) : JSON.stringify(action);
+        if (!merged.has(id)) merged.set(id, action);
+      }
+    }
+    actions = [...merged.values()];
+  } else {
+    const url = buildUrl(endpoint, "/api/rest/actions", {
+      page,
+      pageSize,
+      name: rawQuery ? wrapWildcard(rawQuery) : undefined,
+      description: rawDescription ? wrapWildcard(rawDescription) : undefined,
+      reference: rawReference ? wrapWildcard(rawReference) : undefined,
+      ...sharedFilters
+    });
+    const { payload } = await fetchWithRefresh(deps, account, url);
+    actions = pickCollection(payload, "actions");
+  }
+
+  const summary = rawQuery && !rawDescription && !rawReference
+    ? `Found ${actions.length} matter${actions.length === 1 ? "" : "s"} in ActionStep matching "${rawQuery}" across name / reference / description.`
+    : `Found ${actions.length} matter${actions.length === 1 ? "" : "s"} in ActionStep.`;
+
   return {
-    summary: `Found ${actions.length} matter${actions.length === 1 ? "" : "s"} in ActionStep.`,
-    data: actions,
+    summary,
+    data: isFullPayload(input) ? actions : actions.map(slimMatter),
     source: SOURCE
   };
 }
@@ -152,7 +405,7 @@ async function getAction(
   const action = pickSingle(payload, "actions");
   return {
     summary: action ? `Loaded matter ${matterId}.` : `No matter found with ID ${matterId}.`,
-    data: action ? [action] : [],
+    data: action ? [isFullPayload(input) ? action : slimMatter(action)] : [],
     source: SOURCE
   };
 }
@@ -163,19 +416,37 @@ async function listParticipants(
   input: Record<string, unknown>
 ): Promise<NormalizedToolResponse> {
   const endpoint = getApiEndpoint(account);
-  const { page, pageSize } = pagination(input);
+  const phoneQuery = readString(input, "phone");
+  const phoneDigits = normalizeDigits(phoneQuery);
+  const isPhoneSearch = Boolean(phoneDigits);
+
+  const { page, pageSize: requestedPageSize } = pagination(input);
+  // For phone searches we filter client-side across slots 1-4, so widen the
+  // page size to the API maximum to reduce the chance of missing matches.
+  const pageSize = isPhoneSearch && requestedPageSize < 200 ? 200 : requestedPageSize;
+
+  const rawQuery = readString(input, "query");
   const url = buildUrl(endpoint, "/api/rest/participants", {
     page,
     pageSize,
-    name: readString(input, "query"),
+    displayName: rawQuery ? wrapWildcard(rawQuery) : undefined,
     email: readString(input, "email"),
     participantType: readString(input, "type")
   });
   const { payload } = await fetchWithRefresh(deps, account, url);
-  const participants = pickCollection(payload, "participants");
+  const fetched = pickCollection(payload, "participants");
+  const filtered = isPhoneSearch
+    ? fetched.filter((participant) => participantMatchesPhone(participant, phoneDigits))
+    : fetched;
+
+  const summaryBase = `Found ${filtered.length} participant${filtered.length === 1 ? "" : "s"} in ActionStep`;
+  const summary = isPhoneSearch
+    ? `${summaryBase} matching phone "${phoneQuery}" (out of ${fetched.length} on this page).`
+    : `${summaryBase}.`;
+
   return {
-    summary: `Found ${participants.length} participant${participants.length === 1 ? "" : "s"} in ActionStep.`,
-    data: participants,
+    summary,
+    data: isFullPayload(input) ? filtered : filtered.map(slimParticipant),
     source: SOURCE
   };
 }
@@ -195,7 +466,7 @@ async function getParticipant(
   const participant = pickSingle(payload, "participants");
   return {
     summary: participant ? `Loaded participant ${participantId}.` : `No participant found with ID ${participantId}.`,
-    data: participant ? [participant] : [],
+    data: participant ? [isFullPayload(input) ? participant : slimParticipant(participant)] : [],
     source: SOURCE
   };
 }
@@ -218,7 +489,7 @@ async function listTasks(
   const tasks = pickCollection(payload, "tasks");
   return {
     summary: `Found ${tasks.length} task${tasks.length === 1 ? "" : "s"} in ActionStep.`,
-    data: tasks,
+    data: isFullPayload(input) ? tasks : tasks.map(slimTask),
     source: SOURCE
   };
 }
@@ -242,7 +513,150 @@ async function listTimeEntries(
   const entries = pickCollection(payload, "timerecords");
   return {
     summary: `Found ${entries.length} time entr${entries.length === 1 ? "y" : "ies"} in ActionStep.`,
-    data: entries,
+    data: isFullPayload(input) ? entries : entries.map(slimTimeRecord),
+    source: SOURCE
+  };
+}
+
+async function listFileNotes(
+  deps: ActionStepExecutorDeps,
+  account: ConnectedAccountRecord,
+  input: Record<string, unknown>
+): Promise<NormalizedToolResponse> {
+  const endpoint = getApiEndpoint(account);
+  const { page, pageSize } = pagination(input);
+  const url = buildUrl(endpoint, "/api/rest/filenotes", {
+    page,
+    pageSize,
+    action: readNumber(input, "matter_id"),
+    enteredBy: readNumber(input, "entered_by_participant_id"),
+    dateFrom: readString(input, "date_from"),
+    dateTo: readString(input, "date_to")
+  });
+  const { payload } = await fetchWithRefresh(deps, account, url);
+  const notes = pickCollection(payload, "filenotes");
+  return {
+    summary: `Found ${notes.length} file note${notes.length === 1 ? "" : "s"} in ActionStep.`,
+    data: isFullPayload(input) ? notes : notes.map(slimFileNote),
+    source: SOURCE
+  };
+}
+
+async function listEmails(
+  deps: ActionStepExecutorDeps,
+  account: ConnectedAccountRecord,
+  input: Record<string, unknown>
+): Promise<NormalizedToolResponse> {
+  const endpoint = getApiEndpoint(account);
+  const { page, pageSize } = pagination(input);
+  const url = buildUrl(endpoint, "/api/rest/emails", {
+    page,
+    pageSize,
+    action: readNumber(input, "matter_id"),
+    participant: readNumber(input, "participant_id"),
+    dateFrom: readString(input, "date_from"),
+    dateTo: readString(input, "date_to")
+  });
+  const { payload } = await fetchWithRefresh(deps, account, url);
+  const emails = pickCollection(payload, "emails");
+  return {
+    summary: `Found ${emails.length} email${emails.length === 1 ? "" : "s"} in ActionStep.`,
+    data: isFullPayload(input) ? emails : emails.map(slimEmail),
+    source: SOURCE
+  };
+}
+
+async function getMatterSummary(
+  deps: ActionStepExecutorDeps,
+  account: ConnectedAccountRecord,
+  input: Record<string, unknown>
+): Promise<NormalizedToolResponse> {
+  const endpoint = getApiEndpoint(account);
+  const matterId = readNumber(input, "matter_id");
+  if (!matterId) {
+    throw new Error("matter_id is required");
+  }
+
+  const notesPageSize = readNumber(input, "notes_page_size") ?? 25;
+  const tasksPageSize = readNumber(input, "tasks_page_size") ?? 25;
+  const timePageSize = readNumber(input, "time_page_size") ?? 25;
+  const emailsPageSize = readNumber(input, "emails_page_size") ?? 25;
+
+  const matterUrl = buildUrl(endpoint, `/api/rest/actions/${matterId}`, {});
+  const notesUrl = buildUrl(endpoint, "/api/rest/filenotes", {
+    action: matterId,
+    pageSize: notesPageSize,
+    sort: "-enteredTimestamp"
+  });
+  const tasksUrl = buildUrl(endpoint, "/api/rest/tasks", {
+    action: matterId,
+    pageSize: tasksPageSize
+  });
+  const timeUrl = buildUrl(endpoint, "/api/rest/timerecords", {
+    action: matterId,
+    pageSize: timePageSize,
+    sort: "-date"
+  });
+  const emailsUrl = buildUrl(endpoint, "/api/rest/emails", {
+    action: matterId,
+    pageSize: emailsPageSize,
+    sort: "-sentTimestamp"
+  });
+
+  const [matterRes, notesRes, tasksRes, timeRes, emailsRes] = await Promise.allSettled([
+    fetchWithRefresh(deps, account, matterUrl),
+    fetchWithRefresh(deps, account, notesUrl),
+    fetchWithRefresh(deps, account, tasksUrl),
+    fetchWithRefresh(deps, account, timeUrl),
+    fetchWithRefresh(deps, account, emailsUrl)
+  ]);
+
+  const full = isFullPayload(input);
+  const rawMatter = matterRes.status === "fulfilled" ? pickSingle(matterRes.value.payload, "actions") : undefined;
+  const rawFileNotes = notesRes.status === "fulfilled" ? pickCollection(notesRes.value.payload, "filenotes") : [];
+  const rawTasks = tasksRes.status === "fulfilled" ? pickCollection(tasksRes.value.payload, "tasks") : [];
+  const rawTimeRecords = timeRes.status === "fulfilled" ? pickCollection(timeRes.value.payload, "timerecords") : [];
+  const rawEmails = emailsRes.status === "fulfilled" ? pickCollection(emailsRes.value.payload, "emails") : [];
+
+  const matter = rawMatter ? (full ? rawMatter : slimMatter(rawMatter)) : undefined;
+  const fileNotes = full ? rawFileNotes : rawFileNotes.map(slimFileNote);
+  const tasks = full ? rawTasks : rawTasks.map(slimTask);
+  const timeRecords = full ? rawTimeRecords : rawTimeRecords.map(slimTimeRecord);
+  const emails = full ? rawEmails : rawEmails.map(slimEmail);
+
+  const errors: string[] = [];
+  if (matterRes.status === "rejected") errors.push(`matter: ${matterRes.reason instanceof Error ? matterRes.reason.message : String(matterRes.reason)}`);
+  if (notesRes.status === "rejected") errors.push(`file notes: ${notesRes.reason instanceof Error ? notesRes.reason.message : String(notesRes.reason)}`);
+  if (tasksRes.status === "rejected") errors.push(`tasks: ${tasksRes.reason instanceof Error ? tasksRes.reason.message : String(tasksRes.reason)}`);
+  if (timeRes.status === "rejected") errors.push(`time records: ${timeRes.reason instanceof Error ? timeRes.reason.message : String(timeRes.reason)}`);
+  if (emailsRes.status === "rejected") errors.push(`emails: ${emailsRes.reason instanceof Error ? emailsRes.reason.message : String(emailsRes.reason)}`);
+
+  if (!matter && errors.length > 0) {
+    throw new Error(`Failed to load matter ${matterId}: ${errors.join("; ")}`);
+  }
+
+  const summaryParts = [
+    matter ? `Matter ${matterId} loaded.` : `Matter ${matterId} not found.`,
+    `${fileNotes.length} file note${fileNotes.length === 1 ? "" : "s"}`,
+    `${tasks.length} task${tasks.length === 1 ? "" : "s"}`,
+    `${timeRecords.length} time record${timeRecords.length === 1 ? "" : "s"}`,
+    `${emails.length} email${emails.length === 1 ? "" : "s"}`
+  ];
+  if (errors.length > 0) {
+    summaryParts.push(`(partial: ${errors.join("; ")})`);
+  }
+
+  return {
+    summary: summaryParts.join(" "),
+    data: [
+      {
+        matter: matter ?? null,
+        fileNotes,
+        tasks,
+        timeRecords,
+        emails
+      }
+    ],
     source: SOURCE
   };
 }
@@ -259,6 +673,8 @@ export async function executeActionStepTool(
       return listActions(deps, account, input);
     case "get_matter":
       return getAction(deps, account, input);
+    case "get_matter_summary":
+      return getMatterSummary(deps, account, input);
     case "list_participants":
     case "search_participants":
       return listParticipants(deps, account, input);
@@ -268,6 +684,10 @@ export async function executeActionStepTool(
       return listTasks(deps, account, input);
     case "list_time_entries":
       return listTimeEntries(deps, account, input);
+    case "list_file_notes":
+      return listFileNotes(deps, account, input);
+    case "list_matter_emails":
+      return listEmails(deps, account, input);
     default:
       throw new Error(`Unknown ActionStep tool: ${toolName}`);
   }

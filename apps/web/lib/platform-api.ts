@@ -101,9 +101,19 @@ export type PlatformOverview = {
 
 export type ProviderResponse = {
   provider: string;
+  displayName?: string;
+  supportsOAuth?: boolean;
   status: string;
   connected: boolean;
   lastError?: string;
+  toolNames?: string[];
+};
+
+export type ToolPolicyRecord = {
+  tenantId: string;
+  toolName: string;
+  enabled: boolean;
+  updatedAt: string;
 };
 
 export type N8nWorkflow = {
@@ -305,6 +315,32 @@ export async function fetchAuditEvents(options?: { tenantId?: string; limit?: nu
 
 export async function fetchProviders(session?: PlatformSession | null) {
   return authedFetch<{ providers: ProviderResponse[] }>("/providers", session);
+}
+
+export async function fetchToolPolicies(session?: PlatformSession | null) {
+  return authedFetch<{ policies: ToolPolicyRecord[] }>("/tool-policies", session);
+}
+
+export async function setToolPolicy(toolName: string, enabled: boolean, session?: PlatformSession | null) {
+  return authedFetch<{ policy: ToolPolicyRecord }>(`/tool-policies/${encodeURIComponent(toolName)}`, session, {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ enabled })
+  });
+}
+
+export async function clearToolPolicy(toolName: string, session?: PlatformSession | null) {
+  const activeSession = session ?? readPlatformSession();
+  if (!activeSession) {
+    throw new Error("Not signed in");
+  }
+  const response = await fetch(`${getApiOrigin()}/tool-policies/${encodeURIComponent(toolName)}`, {
+    method: "DELETE",
+    headers: { authorization: `Bearer ${activeSession.token}` }
+  });
+  if (!response.ok && response.status !== 204) {
+    throw new Error(`Failed to reset tool policy (${response.status})`);
+  }
 }
 
 export async function fetchN8nWorkflows(session?: PlatformSession | null) {

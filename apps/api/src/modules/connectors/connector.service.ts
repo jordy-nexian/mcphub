@@ -13,6 +13,7 @@ import { ConnectorConfigStore } from "../../common/store/connector-config.store"
 import { ConnectedAccountStore } from "../../common/store/connected-account.store";
 import type { AuditService } from "../audit/audit.service";
 import type { ModuleService } from "../modules/module.service";
+import type { ToolPolicyService } from "../policies/tool-policy.service";
 
 import { executeActionStepTool } from "./actionstep-executor";
 import { TokenRefreshService } from "./token-refresh.service";
@@ -1158,7 +1159,8 @@ export class ConnectorService {
 
   constructor(
     private readonly auditService: AuditService,
-    private readonly moduleService: ModuleService
+    private readonly moduleService: ModuleService,
+    private readonly toolPolicyService: ToolPolicyService
   ) {
     this.redis?.on("error", (error) => {
       console.warn("[redis]", error.message);
@@ -1179,6 +1181,7 @@ export class ConnectorService {
       .filter((adapter) => !enabled || enabled.has(adapter.provider))
       .map((adapter) => {
         const account = accounts.find((candidate) => candidate.provider === adapter.provider);
+        const tools = adapter.getTools();
         return {
           provider: adapter.provider,
           displayName: adapter.displayName,
@@ -1186,7 +1189,8 @@ export class ConnectorService {
           status: account?.status ?? "DISCONNECTED",
           connected: Boolean(account),
           lastError: account?.lastError,
-          toolNames: adapter.getTools().map((tool) => tool.name)
+          toolNames: tools.map((tool) => tool.name),
+          toolDefinitions: tools.map((tool) => ({ name: tool.name, description: tool.description }))
         };
       });
   }
@@ -1739,6 +1743,11 @@ export class ConnectorService {
     }
 
     await this.assertProviderEnabledForTenant(provider.provider, tenantId);
+
+    const disabledTools = await this.toolPolicyService.getDisabledToolsForTenant(tenantId);
+    if (disabledTools.has(toolName)) {
+      throw new Error(`Tool ${toolName} is disabled for this tenant`);
+    }
 
     if (provider.provider === "halopsa") {
       return this.executeHaloTool(tenantId, userId, roles, toolName, input);

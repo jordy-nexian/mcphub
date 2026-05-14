@@ -66,8 +66,31 @@ async function exchangeActionStepToken(params: URLSearchParams): Promise<TokenPa
   };
 }
 
+const includeFullDescription =
+  "Set true to return the raw ActionStep records (all fields). Default is a slim projection of the most useful fields — keep it false unless you specifically need fields that have been omitted.";
+
 const matterFiltersSchema = z.object({
-  query: z.string().min(1).describe("Free text to search across matter names/references.").optional(),
+  query: z
+    .string()
+    .min(1)
+    .describe(
+      "Free-text search across matter name, reference, AND description. Wildcards are added automatically (`Rochester` → `*Rochester*`). Internally fans out three parallel queries and merges results — so phrases like 'Purchase of 27 High Street, Rochester' will match whichever field the matter actually uses. Prefer this over the field-specific filters below for general searches."
+    )
+    .optional(),
+  description: z
+    .string()
+    .min(1)
+    .describe(
+      "Filter strictly by matter description / summary text. Wildcards added automatically. Use only when you need to constrain to the description field — otherwise use `query`."
+    )
+    .optional(),
+  reference: z
+    .string()
+    .min(1)
+    .describe(
+      "Filter strictly by matter reference / file number. Wildcards added automatically. Use only when searching for a known reference — otherwise use `query`."
+    )
+    .optional(),
   status: z.string().describe("Filter by matter status (e.g. 'active', 'closed').").optional(),
   assigned_to_participant_id: z
     .number()
@@ -88,30 +111,114 @@ const matterFiltersSchema = z.object({
     .positive()
     .max(200)
     .describe("Page size, ActionStep maximum is 200. Defaults to 25 if omitted.")
-    .optional()
+    .optional(),
+  include_full: z.boolean().describe(includeFullDescription).optional()
 });
 
 const matterIdSchema = z.object({
-  matter_id: z.number().int().positive().describe("The ActionStep matter (action) ID.")
+  matter_id: z.number().int().positive().describe("The ActionStep matter (action) ID."),
+  include_full: z.boolean().describe(includeFullDescription).optional()
+});
+
+const matterSummarySchema = z.object({
+  matter_id: z.number().int().positive().describe("The ActionStep matter (action) ID to summarise."),
+  notes_page_size: z
+    .number()
+    .int()
+    .positive()
+    .max(200)
+    .describe("How many recent file notes to pull (defaults to 25).")
+    .optional(),
+  tasks_page_size: z
+    .number()
+    .int()
+    .positive()
+    .max(200)
+    .describe("How many tasks to pull (defaults to 25).")
+    .optional(),
+  time_page_size: z
+    .number()
+    .int()
+    .positive()
+    .max(200)
+    .describe("How many recent time records to pull (defaults to 25).")
+    .optional(),
+  emails_page_size: z
+    .number()
+    .int()
+    .positive()
+    .max(200)
+    .describe("How many recent matter emails to pull (defaults to 25).")
+    .optional(),
+  include_full: z.boolean().describe(includeFullDescription).optional()
+});
+
+const fileNotesFiltersSchema = z.object({
+  matter_id: z
+    .number()
+    .int()
+    .positive()
+    .describe("Limit file notes to the given matter (action) ID.")
+    .optional(),
+  entered_by_participant_id: z
+    .number()
+    .int()
+    .positive()
+    .describe("Limit to file notes entered by a specific participant (fee earner) ID.")
+    .optional(),
+  date_from: z.string().describe("ISO-8601 date (YYYY-MM-DD) lower bound on the note date.").optional(),
+  date_to: z.string().describe("ISO-8601 date (YYYY-MM-DD) upper bound on the note date.").optional(),
+  page: z.number().int().positive().optional(),
+  pageSize: z.number().int().positive().max(200).optional(),
+  include_full: z.boolean().describe(includeFullDescription).optional()
+});
+
+const emailsFiltersSchema = z.object({
+  matter_id: z
+    .number()
+    .int()
+    .positive()
+    .describe("Limit emails to the given matter (action) ID.")
+    .optional(),
+  participant_id: z
+    .number()
+    .int()
+    .positive()
+    .describe("Limit to emails sent to or from a specific participant ID.")
+    .optional(),
+  date_from: z.string().describe("ISO-8601 date (YYYY-MM-DD) lower bound on the sent date.").optional(),
+  date_to: z.string().describe("ISO-8601 date (YYYY-MM-DD) upper bound on the sent date.").optional(),
+  page: z.number().int().positive().optional(),
+  pageSize: z.number().int().positive().max(200).optional(),
+  include_full: z.boolean().describe(includeFullDescription).optional()
 });
 
 const participantFiltersSchema = z.object({
   query: z
     .string()
     .min(1)
-    .describe("Free text — searches participant names, emails and organisations.")
+    .describe("Filter by participant display name. ActionStep wildcards are added automatically.")
     .optional(),
   email: z.string().email().describe("Exact-match email filter.").optional(),
+  phone: z
+    .string()
+    .min(3)
+    .describe(
+      "Search by phone number. ActionStep stores phones split across slots 1–4 (each with country/area/number/label). Pass any digits — formatting like '+44 7700 900 123' or '07700900123' both work. The match is digit-only across all 4 slots on the returned page (use other filters to narrow first if your tenant has many participants)."
+    )
+    .optional(),
   type: z
     .string()
     .describe("Optional participant type filter (e.g. 'individual', 'company').")
     .optional(),
   page: z.number().int().positive().optional(),
-  pageSize: z.number().int().positive().max(200).optional()
+  pageSize: z.number().int().positive().max(200).optional(),
+  include_full: z.boolean().describe(includeFullDescription).optional()
 });
 
 const participantIdSchema = z.object({
-  participant_id: z.number().int().positive().describe("The ActionStep participant ID.")
+  participant_id: z.number().int().positive().describe("The ActionStep participant ID."),
+  include_full: z.boolean().describe(includeFullDescription).optional()
 });
 
 const tasksFiltersSchema = z.object({
@@ -132,7 +239,8 @@ const tasksFiltersSchema = z.object({
     .describe("Filter by task status (e.g. 'open', 'complete').")
     .optional(),
   page: z.number().int().positive().optional(),
-  pageSize: z.number().int().positive().max(200).optional()
+  pageSize: z.number().int().positive().max(200).optional(),
+  include_full: z.boolean().describe(includeFullDescription).optional()
 });
 
 const timeEntriesFiltersSchema = z.object({
@@ -157,7 +265,8 @@ const timeEntriesFiltersSchema = z.object({
     .describe("ISO-8601 date (YYYY-MM-DD) upper bound on the entry date.")
     .optional(),
   page: z.number().int().positive().optional(),
-  pageSize: z.number().int().positive().max(200).optional()
+  pageSize: z.number().int().positive().max(200).optional(),
+  include_full: z.boolean().describe(includeFullDescription).optional()
 });
 
 function scaffold<TInput>(
@@ -235,13 +344,18 @@ export const actionStepAdapter: ProviderAdapter = {
       ),
       scaffold(
         "search_matters",
-        "Search ActionStep matters by free-text name or reference. Use when the user names a specific matter, file reference, or case title and wants to find the matching matter record.",
+        "Search ActionStep matters. Default behaviour: pass `query` and we fan out across name, reference, AND description in parallel and merge — so descriptive phrases like 'Purchase of 27 High Street, Rochester' will match wherever they actually live on the matter record. Use the targeted `description` or `reference` parameters only when you specifically need to constrain to one field. Also supports status, assignee, and client participant filters. ActionStep wildcards (`*foo*`) are added automatically.",
         matterFiltersSchema
       ),
       scaffold(
         "get_matter",
-        "Retrieve a single ActionStep matter (action) by ID. Use when the user has a known matter ID or after `search_matters` returns a candidate. Returns matter name, status, client participant, assigned owner, key dates and references.",
+        "Retrieve a single ActionStep matter (action) by ID. Use when the user has a known matter ID or after `search_matters` returns a candidate. Returns matter name, status, client participant, assigned owner, key dates and references. For a fuller picture that also pulls file notes, tasks, and recent time records, prefer `get_matter_summary`.",
         matterIdSchema
+      ),
+      scaffold(
+        "get_matter_summary",
+        "Use when the user asks for a summary or overview of an ActionStep matter — anything like 'summarise matter X', 'what's happening on this file', 'give me a rundown'. Returns the matter record plus its recent file notes, open tasks, recent time records, and recent emails in one consolidated response so you can produce a narrative summary without further tool calls.",
+        matterSummarySchema
       ),
       scaffold(
         "list_participants",
@@ -250,7 +364,7 @@ export const actionStepAdapter: ProviderAdapter = {
       ),
       scaffold(
         "search_participants",
-        "Search ActionStep participants by name, email or organisation. Use when the user names a client, contact, or related party and wants to find the matching participant record.",
+        "Search ActionStep participants by name (`query`), email, participant `type`, or phone number. Use `phone` when the user gives a number like '07700 900 123' or '+44 7700 900 123' — the match runs digit-only across all four ActionStep phone slots (phone1Number through phone4Number, plus their country/area parts).",
         participantFiltersSchema
       ),
       scaffold(
@@ -267,6 +381,16 @@ export const actionStepAdapter: ProviderAdapter = {
         "list_time_entries",
         "List ActionStep time entries (timerecords). Use when the user asks about recorded time, fee earner activity, or time spent on a matter. Filter by matter_id, participant_id and date range. Returns date, duration, fee earner, narrative and matter linkage.",
         timeEntriesFiltersSchema
+      ),
+      scaffold(
+        "list_file_notes",
+        "List ActionStep file notes for a matter. Use when the user asks about file notes, attendance notes, case notes, narrative history, or 'what's been happening on this file'. Filter by matter_id (preferred), entered_by_participant_id, and date range. Returns each note's text, who entered it, and when.",
+        fileNotesFiltersSchema
+      ),
+      scaffold(
+        "list_matter_emails",
+        "List ActionStep emails recorded against a matter. Use when the user asks about correspondence, email history, sent/received emails, or 'who's been emailing on this file'. Filter by matter_id (preferred), participant_id and date range. Returns each email's subject, from/to, sent timestamp and body summary.",
+        emailsFiltersSchema
       )
     ];
   }
