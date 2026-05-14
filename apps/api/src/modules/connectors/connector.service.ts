@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 
+import { DefaultAzureCredential, type AccessToken, type TokenCredential } from "@azure/identity";
 import Redis from "ioredis";
 import jwt from "jsonwebtoken";
 
@@ -19,6 +20,26 @@ import { executeActionStepTool } from "./actionstep-executor";
 import { TokenRefreshService } from "./token-refresh.service";
 
 const config = buildAppConfig();
+
+const AGENT_TOKEN_SCOPE = "https://ai.azure.com/.default";
+let cachedAgentToken: AccessToken | null = null;
+let agentCredential: TokenCredential | null = null;
+
+async function getAgentBearerToken(): Promise<string> {
+  const now = Date.now();
+  if (cachedAgentToken && cachedAgentToken.expiresOnTimestamp - now > 60_000) {
+    return cachedAgentToken.token;
+  }
+  if (!agentCredential) {
+    agentCredential = new DefaultAzureCredential();
+  }
+  const token = await agentCredential.getToken(AGENT_TOKEN_SCOPE);
+  if (!token) {
+    throw new Error("Failed to acquire an Azure AD token for the Foundry agent endpoint.");
+  }
+  cachedAgentToken = token;
+  return token.token;
+}
 
 type HaloTicketRecord = Record<string, unknown>;
 type HaloClientRecord = Record<string, unknown>;
@@ -1672,16 +1693,12 @@ export class ConnectorService {
   ) {
     const stored = ((await this.configStore.get(tenantId, "actionstep"))?.configJson ?? {}) as StoredConnectorConfig;
     const responsesUrl = stored.azureAgentResponsesUrl?.trim();
-    const apiKey = stored.azureAgentApiKeyEncrypted
-      ? this.encryption.decrypt(stored.azureAgentApiKeyEncrypted)
-      : undefined;
 
     if (!responsesUrl) {
       throw new Error("Save the Azure Foundry Responses endpoint in ActionStep settings before chatting.");
     }
-    if (!apiKey) {
-      throw new Error("Save the Azure Foundry API key in ActionStep settings before chatting.");
-    }
+
+    const bearerToken = await getAgentBearerToken();
 
     const buildItem = (role: "user" | "assistant" | "system", text: string) => ({
       type: "message",
@@ -1704,8 +1721,7 @@ export class ConnectorService {
       headers: {
         "content-type": "application/json",
         accept: stream ? "text/event-stream" : "application/json",
-        "api-key": apiKey,
-        authorization: `Bearer ${apiKey}`
+        authorization: `Bearer ${bearerToken}`
       } satisfies Record<string, string>,
       body: JSON.stringify({ input: inputItems, stream })
     };

@@ -16,6 +16,7 @@
     "issue-mcp-token": "tsx scripts/issue-mcp-token.ts"
   },
   "dependencies": {
+    "@azure/identity": "^4.5.0",
     "@nexian/connectors": "workspace:*",
     "@nexian/core": "workspace:*",
     "fastify": "^5.0.0",
