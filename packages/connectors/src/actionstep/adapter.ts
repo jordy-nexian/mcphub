@@ -178,8 +178,7 @@ const emailsFiltersSchema = z.object({
     .number()
     .int()
     .positive()
-    .describe("Limit emails to the given matter (action) ID.")
-    .optional(),
+    .describe("Required. The ActionStep matter (action) ID to list emails for. Emails must be scoped to a matter — call search_matters first if you only have a name."),
   participant_id: z
     .number()
     .int()
@@ -197,7 +196,9 @@ const participantFiltersSchema = z.object({
   query: z
     .string()
     .min(1)
-    .describe("Filter by participant display name. ActionStep wildcards are added automatically.")
+    .describe(
+      "Filter by participant name. Single tokens search displayName with wildcards. Multi-word queries (e.g. 'John Smith') fan out in parallel across displayName, reversed 'Last, First' displayName, and firstName+lastName field filters — handles ActionStep's varying name formats."
+    )
     .optional(),
   email: z.string().email().describe("Exact-match email filter.").optional(),
   phone: z
@@ -364,7 +365,7 @@ export const actionStepAdapter: ProviderAdapter = {
       ),
       scaffold(
         "search_participants",
-        "Search ActionStep participants by name (`query`), email, participant `type`, or phone number. Use `phone` when the user gives a number like '07700 900 123' or '+44 7700 900 123' — the match runs digit-only across all four ActionStep phone slots (phone1Number through phone4Number, plus their country/area parts).",
+        "Search ActionStep participants by name (`query`), email, participant `type`, or phone number. Full names work — pass 'John Smith' and we fan out in parallel across displayName ('John Smith'), reversed displayName ('Smith, John' — ActionStep's common format), and firstName+lastName field filters, then merge by ID. Use `phone` when the user gives a number like '07700 900 123' or '+44 7700 900 123' — the match runs digit-only across all four ActionStep phone slots (phone1Number through phone4Number, plus their country/area parts).",
         participantFiltersSchema
       ),
       scaffold(
@@ -389,7 +390,7 @@ export const actionStepAdapter: ProviderAdapter = {
       ),
       scaffold(
         "list_matter_emails",
-        "List ActionStep emails recorded against a matter. Use when the user asks about correspondence, email history, sent/received emails, or 'who's been emailing on this file'. Filter by matter_id (preferred), participant_id and date range. Returns each email's subject, from/to, sent timestamp and body summary.",
+        "List ActionStep emails recorded against a matter. Use when the user asks about correspondence, email history, sent/received emails, or 'who's been emailing on this file'. `matter_id` is REQUIRED — emails must be scoped to a specific matter; call search_matters first if you only have a name. Also supports optional participant_id and date_from/date_to filters. Returns each email's subject, from/to, sent timestamp and body summary.",
         emailsFiltersSchema
       )
     ];

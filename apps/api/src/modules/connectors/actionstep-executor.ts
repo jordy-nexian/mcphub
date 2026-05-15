@@ -511,23 +511,82 @@ async function listParticipants(
   const pageSize = isPhoneSearch && requestedPageSize < 200 ? 200 : requestedPageSize;
 
   const rawQuery = readString(input, "query");
-  const url = buildUrl(endpoint, "/api/rest/participants", {
-    page,
-    pageSize,
-    displayName: rawQuery ? wrapWildcard(rawQuery) : undefined,
-    email: readString(input, "email"),
-    participantType: readString(input, "type")
-  });
-  const { payload } = await fetchWithRefresh(deps, account, url);
-  const fetched = pickCollection(payload, "participants");
+  const email = readString(input, "email");
+  const participantType = readString(input, "type");
+
+  const sharedFilters = {
+    email,
+    participantType
+  };
+
+  let fetched: Record<string, unknown>[];
+
+  // ActionStep stores names split across firstName / lastName / displayName, and
+  // displayName is often "Last, First" rather than "First Last". A single
+  // displayName wildcard search misses real records. When the query looks like
+  // a full name (has whitespace), fan out across the likely shapes and merge.
+  const queryParts = rawQuery ? rawQuery.split(/\s+/).filter(Boolean) : [];
+  const isMultiWordName = queryParts.length >= 2 && !email && !participantType;
+
+  if (rawQuery && isMultiWordName) {
+    const firstName = queryParts[0];
+    const lastName = queryParts[queryParts.length - 1];
+    const reversed = `${lastName}, ${firstName}`;
+
+    const variants: { displayName?: string; firstName?: string; lastName?: string }[] = [
+      { displayName: wrapWildcard(rawQuery) },
+      { displayName: wrapWildcard(reversed) },
+      { lastName: wrapWildcard(lastName), firstName: wrapWildcard(firstName) }
+    ];
+
+    const responses = await Promise.allSettled(
+      variants.map((variant) =>
+        fetchWithRefresh(
+          deps,
+          account,
+          buildUrl(endpoint, "/api/rest/participants", {
+            page,
+            pageSize,
+            ...sharedFilters,
+            ...variant
+          })
+        )
+      )
+    );
+
+    const merged = new Map<string, Record<string, unknown>>();
+    for (const result of responses) {
+      if (result.status !== "fulfilled") continue;
+      for (const participant of pickCollection(result.value.payload, "participants")) {
+        const id = participant.id !== undefined ? String(participant.id) : JSON.stringify(participant);
+        if (!merged.has(id)) merged.set(id, participant);
+      }
+    }
+    fetched = [...merged.values()];
+  } else {
+    const url = buildUrl(endpoint, "/api/rest/participants", {
+      page,
+      pageSize,
+      displayName: rawQuery ? wrapWildcard(rawQuery) : undefined,
+      ...sharedFilters
+    });
+    const { payload } = await fetchWithRefresh(deps, account, url);
+    fetched = pickCollection(payload, "participants");
+  }
+
   const filtered = isPhoneSearch
     ? fetched.filter((participant) => participantMatchesPhone(participant, phoneDigits))
     : fetched;
 
   const summaryBase = `Found ${filtered.length} participant${filtered.length === 1 ? "" : "s"} in ActionStep`;
-  const summary = isPhoneSearch
-    ? `${summaryBase} matching phone "${phoneQuery}" (out of ${fetched.length} on this page).`
-    : `${summaryBase}.`;
+  let summary: string;
+  if (isPhoneSearch) {
+    summary = `${summaryBase} matching phone "${phoneQuery}" (out of ${fetched.length} on this page).`;
+  } else if (isMultiWordName) {
+    summary = `${summaryBase} matching "${rawQuery}" across displayName / first+last name variants.`;
+  } else {
+    summary = `${summaryBase}.`;
+  }
 
   return {
     summary,
@@ -702,6 +761,11 @@ async function listEmails(
 ): Promise<NormalizedToolResponse> {
   const endpoint = getApiEndpoint(account);
   const matterId = readNumber(input, "matter_id");
+  if (!matterId) {
+    throw new Error(
+      "matter_id is required for list_matter_emails — ActionStep emails must be scoped to a matter. Use search_matters first if you only have a matter name."
+    );
+  }
   const baseQuery = {
     action: matterId,
     participant: readNumber(input, "participant_id"),
@@ -709,23 +773,14 @@ async function listEmails(
     dateTo: readString(input, "date_to")
   };
 
-  let emails: Record<string, unknown>[];
-  let paging: PagingMeta = {};
-  let pagesFetched = 0;
-
-  if (matterId !== undefined) {
-    const result = await fetchAllPages(deps, account, endpoint, "/api/rest/emails", baseQuery, "emails");
-    emails = result.records;
-    paging = result.paging;
-    pagesFetched = result.pagesFetched;
-  } else {
-    const { page, pageSize } = pagination(input);
-    const url = buildUrl(endpoint, "/api/rest/emails", { ...baseQuery, page, pageSize });
-    const { payload } = await fetchWithRefresh(deps, account, url);
-    emails = pickCollection(payload, "emails");
-    paging = extractPaging(payload);
-    pagesFetched = 1;
-  }
+  const { records: emails, paging, pagesFetched } = await fetchAllPages(
+    deps,
+    account,
+    endpoint,
+    "/api/rest/emails",
+    baseQuery,
+    "emails"
+  );
 
   const totalKnown = paging.recordCount;
   const truncatedNote =
@@ -734,7 +789,7 @@ async function listEmails(
       : "";
 
   return {
-    summary: `Found ${emails.length} email${emails.length === 1 ? "" : "s"}${matterId ? ` on matter ${matterId}` : ""} in ActionStep.${truncatedNote}`,
+    summary: `Found ${emails.length} email${emails.length === 1 ? "" : "s"} on matter ${matterId} in ActionStep.${truncatedNote}`,
     data: isFullPayload(input) ? emails : emails.map(slimEmail),
     source: SOURCE
   };
