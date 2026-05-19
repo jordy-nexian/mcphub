@@ -547,7 +547,8 @@ async function listParticipants(
     const variants: { displayName?: string; firstName?: string; lastName?: string }[] = [
       { displayName: wrapWildcard(rawQuery) },
       { displayName: wrapWildcard(reversed) },
-      { lastName: wrapWildcard(lastName), firstName: wrapWildcard(firstName) }
+      { lastName: wrapWildcard(lastName), firstName: wrapWildcard(firstName) },
+      { displayName: wrapWildcard(lastName) }
     ];
 
     const responses = await Promise.allSettled(
@@ -594,7 +595,7 @@ async function listParticipants(
   if (isPhoneSearch) {
     summary = `${summaryBase} matching phone "${phoneQuery}" (out of ${fetched.length} on this page).`;
   } else if (isMultiWordName) {
-    summary = `${summaryBase} matching "${rawQuery}" across displayName / first+last name variants.`;
+    summary = `${summaryBase} matching "${rawQuery}" across displayName / first+last / last-name-only variants.`;
   } else {
     summary = `${summaryBase}.`;
   }
