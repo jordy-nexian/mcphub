@@ -539,16 +539,19 @@ async function listParticipants(
   const queryParts = rawQuery ? rawQuery.split(/\s+/).filter(Boolean) : [];
   const isMultiWordName = queryParts.length >= 2 && !email && !participantType;
 
+  const variantDiagnostics: string[] = [];
+
   if (rawQuery && isMultiWordName) {
     const firstName = queryParts[0];
     const lastName = queryParts[queryParts.length - 1];
     const reversed = `${lastName}, ${firstName}`;
 
-    const variants: { displayName?: string; firstName?: string; lastName?: string }[] = [
-      { displayName: wrapWildcard(rawQuery) },
-      { displayName: wrapWildcard(reversed) },
-      { lastName: wrapWildcard(lastName), firstName: wrapWildcard(firstName) },
-      { displayName: wrapWildcard(lastName) }
+    const variants: { label: string; filter: { displayName?: string; firstName?: string; lastName?: string } }[] = [
+      { label: `displayName=*${rawQuery}*`, filter: { displayName: wrapWildcard(rawQuery) } },
+      { label: `displayName=*${reversed}*`, filter: { displayName: wrapWildcard(reversed) } },
+      { label: `lastName=*${lastName}* & firstName=*${firstName}*`, filter: { lastName: wrapWildcard(lastName), firstName: wrapWildcard(firstName) } },
+      { label: `displayName=*${lastName}*`, filter: { displayName: wrapWildcard(lastName) } },
+      { label: `lastName=*${lastName}*`, filter: { lastName: wrapWildcard(lastName) } }
     ];
 
     const responses = await Promise.allSettled(
@@ -560,20 +563,27 @@ async function listParticipants(
             page,
             pageSize,
             ...sharedFilters,
-            ...variant
+            ...variant.filter
           })
         )
       )
     );
 
     const merged = new Map<string, Record<string, unknown>>();
-    for (const result of responses) {
-      if (result.status !== "fulfilled") continue;
-      for (const participant of pickCollection(result.value.payload, "participants")) {
+    responses.forEach((result, index) => {
+      const variant = variants[index];
+      if (result.status !== "fulfilled") {
+        const reason = result.reason instanceof Error ? result.reason.message : String(result.reason);
+        variantDiagnostics.push(`${variant.label} → ERROR: ${reason.slice(0, 140)}`);
+        return;
+      }
+      const records = pickCollection(result.value.payload, "participants");
+      variantDiagnostics.push(`${variant.label} → ${records.length}`);
+      for (const participant of records) {
         const id = participant.id !== undefined ? String(participant.id) : JSON.stringify(participant);
         if (!merged.has(id)) merged.set(id, participant);
       }
-    }
+    });
     fetched = [...merged.values()];
   } else {
     const url = buildUrl(endpoint, "/api/rest/participants", {
@@ -596,6 +606,9 @@ async function listParticipants(
     summary = `${summaryBase} matching phone "${phoneQuery}" (out of ${fetched.length} on this page).`;
   } else if (isMultiWordName) {
     summary = `${summaryBase} matching "${rawQuery}" across displayName / first+last / last-name-only variants.`;
+    if (filtered.length === 0 && variantDiagnostics.length > 0) {
+      summary += ` Variant attempts: ${variantDiagnostics.join("; ")}.`;
+    }
   } else {
     summary = `${summaryBase}.`;
   }
