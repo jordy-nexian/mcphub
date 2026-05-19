@@ -280,13 +280,17 @@ const dormantMattersSchema = z.object({
     .optional(),
   status: z
     .string()
-    .describe("Matter status to scan. Defaults to 'active' — pass 'closed' or another status to widen.")
+    .describe("Matter status to scan. ActionStep is case-sensitive — defaults to 'Active'. Pass 'Closed' or another status to widen.")
     .optional(),
   assigned_to_participant_id: z
     .number()
     .int()
     .positive()
     .describe("Restrict the scan to matters assigned to this participant (fee earner). Optional.")
+    .optional(),
+  require_recent_activity: z
+    .boolean()
+    .describe("If true, only return matters whose `lastActivityTimestamp` falls inside the window — i.e. matters that have been WORKED ON (notes, emails, status changes, etc.) but where no time was recorded. Use when the user asks for 'matters worked on but not billed', 'work without time recorded', or 'unrecorded time' rather than truly dormant files.")
     .optional(),
   include_full: z.boolean().describe(includeFullDescription).optional()
 });
@@ -313,6 +317,44 @@ const quietMattersSchema = z.object({
     .array(z.enum(["time", "file_notes", "emails"]))
     .min(1)
     .describe("Activity signals that count as 'a sign of life'. A matter is quiet only if ALL chosen signals are absent in the window. Defaults to all three.")
+    .optional(),
+  include_full: z.boolean().describe(includeFullDescription).optional()
+});
+
+const mattersForParticipantSchema = z.object({
+  participant_id: z
+    .number()
+    .int()
+    .positive()
+    .describe("Required. The ActionStep participant ID whose matters you want. Resolve a name via `search_participants` first if needed."),
+  status: z
+    .string()
+    .describe("Optional matter status filter (e.g. 'active', 'closed'). Default: all statuses, since clients often have a mix of historic and live work.")
+    .optional(),
+  include_full: z.boolean().describe(includeFullDescription).optional()
+});
+
+const clientBriefSchema = z.object({
+  participant_id: z
+    .number()
+    .int()
+    .positive()
+    .describe("Required. The ActionStep participant ID for the client. Use `search_participants` to resolve from a name like 'ABC Ltd'."),
+  days: z
+    .number()
+    .int()
+    .positive()
+    .max(3650)
+    .describe("Lookback window in days for file notes / time records / emails. Default 730 (≈2 years).")
+    .optional(),
+  status: z
+    .string()
+    .describe("Optional matter status filter. Default: all statuses — meeting prep typically wants concluded matters too.")
+    .optional(),
+  include: z
+    .array(z.enum(["file_notes", "time_entries", "emails"]))
+    .min(1)
+    .describe("Which activity feeds to bundle per matter. Default `['file_notes','time_entries']`. Add `'emails'` for full correspondence prep — heavier but more complete.")
     .optional(),
   include_full: z.boolean().describe(includeFullDescription).optional()
 });
@@ -463,7 +505,7 @@ export const actionStepAdapter: ProviderAdapter = {
       ),
       scaffold(
         "list_dormant_matters",
-        "Find ActionStep matters with NO TIME RECORDED in the last N days. Use when the user asks about dormant matters, files with no recent time, 'which matters haven't been worked on', 'matters with zero time this fortnight', or wants to chase fee earners about untracked work. Defaults: 14 days, status='active'. Optionally narrow to a single fee earner via assigned_to_participant_id. Returns each dormant matter with its slim record plus activity counters in the window.",
+        "Find ActionStep matters with NO TIME RECORDED in the last N days. Two modes: (1) default — every matter with zero time entries in the window, regardless of other activity; (2) set `require_recent_activity: true` to narrow to matters that have been worked on (per `lastActivityTimestamp`) but never had time entered — i.e. unrecorded billable work. Use mode 1 for 'dormant matters', 'which matters haven't been worked on', closure candidates. Use mode 2 for 'matters worked on but not billed', 'unrecorded time', 'work without time recorded'. Defaults: 14 days, status='Active'. Optionally narrow to a single fee earner via assigned_to_participant_id.",
         dormantMattersSchema
       ),
       scaffold(
@@ -475,6 +517,16 @@ export const actionStepAdapter: ProviderAdapter = {
         "get_matter_activity_summary",
         "List matters with per-matter activity counters and last-touched timestamps across time entries, file notes and emails for the last N days. Use when the user wants a portfolio view ('show me my book sorted by activity', 'which of my matters has the most going on', 'when did I last touch each file'). Strongly prefer passing `assigned_to_participant_id` to scope to a fee earner — otherwise this scans every active matter in the firm.",
         matterActivitySummarySchema
+      ),
+      scaffold(
+        "list_matters_for_participant",
+        "List every ActionStep matter a participant is linked to — via the `actionparticipants` join, so it includes matters where the participant is a related party, debtor, witness, etc., not just the primary client. Use when the user asks 'all matters for ABC Ltd', 'every file Jane Doe is involved in', or any client-wide view. `search_matters` with `client_participant_id` is narrower (primary client only) — prefer this tool when the user says 'all matters for X'.",
+        mattersForParticipantSchema
+      ),
+      scaffold(
+        "get_client_brief",
+        "Generate a client meeting prep brief: every matter the participant is involved in (via `actionparticipants`), plus recent file notes, time records and (optionally) emails per matter over the lookback window. Use when the user asks 'summarise all matters and communications for X', 'prep me for a meeting with ABC Ltd', 'what's been happening across this client's files', or 'give me a 2-year picture of this client'. Returns one bundle per matter with totals (billable hours, note count, etc.).",
+        clientBriefSchema
       )
     ];
   }

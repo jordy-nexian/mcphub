@@ -35,6 +35,17 @@ function readNumber(input: Record<string, unknown>, key: string): number | undef
   return undefined;
 }
 
+function readBoolean(input: Record<string, unknown>, key: string): boolean | undefined {
+  const value = input[key];
+  if (typeof value === "boolean") return value;
+  if (typeof value === "string") {
+    const trimmed = value.trim().toLowerCase();
+    if (trimmed === "true") return true;
+    if (trimmed === "false") return false;
+  }
+  return undefined;
+}
+
 function buildUrl(endpoint: string, path: string, query: Record<string, string | number | undefined>) {
   const url = new URL(`${endpoint}${path}`);
   for (const [key, value] of Object.entries(query)) {
@@ -1019,8 +1030,9 @@ async function listDormantMatters(
   input: Record<string, unknown>
 ): Promise<NormalizedToolResponse> {
   const days = readNumber(input, "days") ?? 14;
-  const status = readString(input, "status") ?? "active";
+  const status = readString(input, "status") ?? "Active";
   const assignedTo = readNumber(input, "assigned_to_participant_id");
+  const requireRecentActivity = readBoolean(input, "require_recent_activity") ?? false;
 
   const index = await buildMatterActivityIndex(deps, account, {
     days,
@@ -1030,13 +1042,22 @@ async function listDormantMatters(
   });
 
   const nowMs = Date.now();
+  const windowStartMs = Date.parse(index.windowStart);
   const full = isFullPayload(input);
   const dormant = index.matters
     .filter((matter) => {
       const id = matter.id !== undefined ? String(matter.id) : "";
       if (!id) return false;
       const activity = index.activityByMatterId.get(id);
-      return !activity || activity.timeEntryCount === 0;
+      const noTime = !activity || activity.timeEntryCount === 0;
+      if (!noTime) return false;
+      if (requireRecentActivity) {
+        const lastTouched = pickTimestamp(matter, ["lastActivityTimestamp", "modifiedTimestamp"]);
+        if (!lastTouched) return false;
+        const ts = Date.parse(lastTouched);
+        if (!Number.isFinite(ts) || ts < windowStartMs) return false;
+      }
+      return true;
     })
     .map((matter) => {
       const id = String(matter.id);
@@ -1044,9 +1065,10 @@ async function listDormantMatters(
     });
 
   const scope = assignedTo ? ` assigned to participant ${assignedTo}` : "";
+  const qualifier = requireRecentActivity ? " (worked on per lastActivityTimestamp, but no time recorded)" : "";
   return {
     summary:
-      `Found ${dormant.length} ${status} matter${dormant.length === 1 ? "" : "s"}${scope} with no time recorded ` +
+      `Found ${dormant.length} ${status} matter${dormant.length === 1 ? "" : "s"}${scope}${qualifier} ` +
       `since ${index.windowStart} (scanned ${index.matters.length} matter${index.matters.length === 1 ? "" : "s"}).` +
       buildTruncationNote(index),
     data: dormant,
@@ -1060,7 +1082,7 @@ async function listQuietMatters(
   input: Record<string, unknown>
 ): Promise<NormalizedToolResponse> {
   const days = readNumber(input, "days") ?? 14;
-  const status = readString(input, "status") ?? "active";
+  const status = readString(input, "status") ?? "Active";
   const assignedTo = readNumber(input, "assigned_to_participant_id");
 
   const rawSignals = input["signals"];
@@ -1112,7 +1134,7 @@ async function getMatterActivitySummary(
   input: Record<string, unknown>
 ): Promise<NormalizedToolResponse> {
   const days = readNumber(input, "days") ?? 14;
-  const status = readString(input, "status") ?? "active";
+  const status = readString(input, "status") ?? "Active";
   const assignedTo = readNumber(input, "assigned_to_participant_id");
   const signals: ActivitySignal[] = ["time", "file_notes", "emails"];
 
@@ -1146,6 +1168,256 @@ async function getMatterActivitySummary(
       `with counts since ${index.windowStart}, sorted by most-recent activity first.` +
       buildTruncationNote(index),
     data: decorated,
+    source: SOURCE
+  };
+}
+
+type ParticipantMatters = {
+  matters: Record<string, unknown>[];
+  roleByMatterId: Map<string, string[]>;
+  linkRecordCount: number;
+  linkPagesFetched: number;
+  matterFetchErrors: string[];
+};
+
+async function fetchMattersForParticipant(
+  deps: ActionStepExecutorDeps,
+  account: ConnectedAccountRecord,
+  participantId: number,
+  status: string | undefined
+): Promise<ParticipantMatters> {
+  const endpoint = getApiEndpoint(account);
+
+  const linksFetch = await fetchAllPages(
+    deps,
+    account,
+    endpoint,
+    "/api/rest/actionparticipants",
+    { participant: participantId },
+    "actionparticipants"
+  );
+
+  const roleByMatterId = new Map<string, string[]>();
+  for (const record of linksFetch.records) {
+    const matterId = extractLinkedId(record, "action");
+    if (!matterId) continue;
+    const role = extractLinkedId(record, "participantType") ?? "participant";
+    const roles = roleByMatterId.get(matterId) ?? [];
+    if (!roles.includes(role)) roles.push(role);
+    roleByMatterId.set(matterId, roles);
+  }
+
+  const matterIds = [...roleByMatterId.keys()];
+  const responses = await Promise.allSettled(
+    matterIds.map((id) =>
+      fetchWithRefresh(deps, account, buildUrl(endpoint, `/api/rest/actions/${id}`, {}))
+    )
+  );
+
+  const matters: Record<string, unknown>[] = [];
+  const matterFetchErrors: string[] = [];
+  const statusLower = status?.toLowerCase();
+
+  responses.forEach((result, index) => {
+    const id = matterIds[index];
+    if (result.status === "rejected") {
+      matterFetchErrors.push(`${id}: ${result.reason instanceof Error ? result.reason.message : String(result.reason)}`);
+      return;
+    }
+    const matter = pickSingle(result.value.payload, "actions");
+    if (!matter) return;
+    if (statusLower) {
+      const matterStatus = typeof matter.status === "string" ? matter.status.toLowerCase() : undefined;
+      if (matterStatus !== statusLower) return;
+    }
+    matters.push(matter);
+  });
+
+  return {
+    matters,
+    roleByMatterId,
+    linkRecordCount: linksFetch.records.length,
+    linkPagesFetched: linksFetch.pagesFetched,
+    matterFetchErrors
+  };
+}
+
+async function listMattersForParticipant(
+  deps: ActionStepExecutorDeps,
+  account: ConnectedAccountRecord,
+  input: Record<string, unknown>
+): Promise<NormalizedToolResponse> {
+  const participantId = readNumber(input, "participant_id");
+  if (!participantId) {
+    throw new Error("participant_id is required");
+  }
+  const status = readString(input, "status");
+  const full = isFullPayload(input);
+
+  const { matters, roleByMatterId, linkRecordCount, matterFetchErrors } = await fetchMattersForParticipant(
+    deps,
+    account,
+    participantId,
+    status
+  );
+
+  const decorated = matters.map((matter) => {
+    const id = matter.id !== undefined ? String(matter.id) : "";
+    const base = full ? matter : slimMatter(matter);
+    return {
+      ...base,
+      participantRoles: roleByMatterId.get(id) ?? []
+    };
+  });
+
+  const statusNote = status ? ` (filtered to status='${status}')` : "";
+  const errorNote = matterFetchErrors.length > 0
+    ? ` WARNING: ${matterFetchErrors.length} matter fetch${matterFetchErrors.length === 1 ? "" : "es"} failed: ${matterFetchErrors.slice(0, 3).join("; ")}${matterFetchErrors.length > 3 ? "…" : ""}.`
+    : "";
+
+  return {
+    summary:
+      `Participant ${participantId} is linked to ${linkRecordCount} actionparticipant record${linkRecordCount === 1 ? "" : "s"} ` +
+      `→ ${decorated.length} matter${decorated.length === 1 ? "" : "s"}${statusNote}.${errorNote}`,
+    data: decorated,
+    source: SOURCE
+  };
+}
+
+function totalMinutes(record: Record<string, unknown>): number {
+  const chargeable = readNumber(record, "chargeableMinutes");
+  if (typeof chargeable === "number") return chargeable;
+  const actual = readNumber(record, "actualMinutes");
+  if (typeof actual === "number") return actual;
+  return 0;
+}
+
+async function getClientBrief(
+  deps: ActionStepExecutorDeps,
+  account: ConnectedAccountRecord,
+  input: Record<string, unknown>
+): Promise<NormalizedToolResponse> {
+  const participantId = readNumber(input, "participant_id");
+  if (!participantId) {
+    throw new Error("participant_id is required");
+  }
+  const days = readNumber(input, "days") ?? 730;
+  const status = readString(input, "status");
+  const full = isFullPayload(input);
+
+  const allowedInclude = ["file_notes", "time_entries", "emails"] as const;
+  type IncludeOption = (typeof allowedInclude)[number];
+  const rawInclude = input["include"];
+  const include: IncludeOption[] = Array.isArray(rawInclude)
+    ? rawInclude.filter((value): value is IncludeOption =>
+        typeof value === "string" && (allowedInclude as readonly string[]).includes(value)
+      )
+    : ["file_notes", "time_entries"];
+  const effectiveInclude: IncludeOption[] = include.length > 0 ? include : ["file_notes", "time_entries"];
+
+  const wantNotes = effectiveInclude.includes("file_notes");
+  const wantTime = effectiveInclude.includes("time_entries");
+  const wantEmails = effectiveInclude.includes("emails");
+
+  const windowStart = new Date(Date.now() - days * 24 * 60 * 60 * 1000)
+    .toISOString()
+    .slice(0, 10);
+
+  const { matters, roleByMatterId, linkRecordCount, matterFetchErrors } = await fetchMattersForParticipant(
+    deps,
+    account,
+    participantId,
+    status
+  );
+
+  if (matters.length === 0) {
+    return {
+      summary:
+        `Participant ${participantId} has no${status ? ` ${status}` : ""} matters linked via actionparticipants ` +
+        `(${linkRecordCount} link record${linkRecordCount === 1 ? "" : "s"} scanned).`,
+      data: [],
+      source: SOURCE
+    };
+  }
+
+  const endpoint = getApiEndpoint(account);
+
+  const bundles = await Promise.all(
+    matters.map(async (matter) => {
+      const id = matter.id !== undefined ? String(matter.id) : "";
+      const matterIdNumeric = Number(id);
+
+      const noResult: ActivityFetchOutcome = { records: [], paging: {}, pagesFetched: 0 };
+
+      const [notesRes, timeRes, emailsRes] = await Promise.allSettled([
+        wantNotes && Number.isFinite(matterIdNumeric)
+          ? fetchAllPages(deps, account, endpoint, "/api/rest/filenotes", { action: matterIdNumeric, dateFrom: windowStart }, "filenotes")
+          : Promise.resolve(noResult),
+        wantTime && Number.isFinite(matterIdNumeric)
+          ? fetchAllPages(deps, account, endpoint, "/api/rest/timerecords", { action: matterIdNumeric, dateFrom: windowStart }, "timerecords")
+          : Promise.resolve(noResult),
+        wantEmails && Number.isFinite(matterIdNumeric)
+          ? fetchAllPages(deps, account, endpoint, "/api/rest/emails", { action: matterIdNumeric, dateFrom: windowStart }, "emails")
+          : Promise.resolve(noResult)
+      ]);
+
+      const rawNotes = notesRes.status === "fulfilled" ? notesRes.value.records : [];
+      const rawTime = timeRes.status === "fulfilled" ? timeRes.value.records : [];
+      const rawEmails = emailsRes.status === "fulfilled" ? emailsRes.value.records : [];
+
+      const billableMinutes = rawTime.reduce((sum, record) => sum + totalMinutes(record), 0);
+
+      const fetchErrors: string[] = [];
+      if (notesRes.status === "rejected") fetchErrors.push(`notes: ${notesRes.reason instanceof Error ? notesRes.reason.message : String(notesRes.reason)}`);
+      if (timeRes.status === "rejected") fetchErrors.push(`time: ${timeRes.reason instanceof Error ? timeRes.reason.message : String(timeRes.reason)}`);
+      if (emailsRes.status === "rejected") fetchErrors.push(`emails: ${emailsRes.reason instanceof Error ? emailsRes.reason.message : String(emailsRes.reason)}`);
+
+      const bundle: Record<string, unknown> = {
+        matter: full ? matter : slimMatter(matter),
+        participantRoles: roleByMatterId.get(id) ?? [],
+        totals: {
+          fileNoteCount: rawNotes.length,
+          timeEntryCount: rawTime.length,
+          emailCount: rawEmails.length,
+          billableHours: Math.round((billableMinutes / 60) * 100) / 100
+        }
+      };
+
+      if (wantNotes) bundle.fileNotes = full ? rawNotes : rawNotes.map(slimFileNote);
+      if (wantTime) bundle.timeRecords = full ? rawTime : rawTime.map(slimTimeRecord);
+      if (wantEmails) bundle.emails = full ? rawEmails : rawEmails.map(slimEmail);
+      if (fetchErrors.length > 0) bundle.errors = fetchErrors;
+
+      return bundle;
+    })
+  );
+
+  type BundleTotals = { fileNoteCount: number; timeEntryCount: number; emailCount: number; billableHours: number };
+  const grandTotals: BundleTotals = bundles.reduce<BundleTotals>(
+    (acc, bundle) => {
+      const t = bundle.totals as BundleTotals;
+      acc.fileNoteCount += t.fileNoteCount;
+      acc.timeEntryCount += t.timeEntryCount;
+      acc.emailCount += t.emailCount;
+      acc.billableHours += t.billableHours;
+      return acc;
+    },
+    { fileNoteCount: 0, timeEntryCount: 0, emailCount: 0, billableHours: 0 }
+  );
+  grandTotals.billableHours = Math.round(grandTotals.billableHours * 100) / 100;
+
+  const errorNote = matterFetchErrors.length > 0
+    ? ` WARNING: ${matterFetchErrors.length} matter record${matterFetchErrors.length === 1 ? "" : "s"} failed to load.`
+    : "";
+
+  return {
+    summary:
+      `Brief for participant ${participantId}: ${matters.length} matter${matters.length === 1 ? "" : "s"}, ` +
+      `${grandTotals.fileNoteCount} file note${grandTotals.fileNoteCount === 1 ? "" : "s"}, ` +
+      `${grandTotals.timeEntryCount} time entr${grandTotals.timeEntryCount === 1 ? "y" : "ies"} ` +
+      `(${grandTotals.billableHours}h billable), ` +
+      `${grandTotals.emailCount} email${grandTotals.emailCount === 1 ? "" : "s"} since ${windowStart}.${errorNote}`,
+    data: bundles,
     source: SOURCE
   };
 }
@@ -1278,6 +1550,10 @@ export async function executeActionStepTool(
       return listQuietMatters(deps, account, input);
     case "get_matter_activity_summary":
       return getMatterActivitySummary(deps, account, input);
+    case "list_matters_for_participant":
+      return listMattersForParticipant(deps, account, input);
+    case "get_client_brief":
+      return getClientBrief(deps, account, input);
     default:
       throw new Error(`Unknown ActionStep tool: ${toolName}`);
   }
