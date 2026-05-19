@@ -530,16 +530,40 @@ async function listParticipants(
     participantType
   };
 
-  // ActionStep's participants endpoint does substring matching by default;
-  // wrapping with `*` makes it search for literal asterisks and returns 0.
-  const url = buildUrl(endpoint, "/api/rest/participants", {
-    page,
-    pageSize,
-    displayName: rawQuery,
-    ...sharedFilters
-  });
-  const { payload } = await fetchWithRefresh(deps, account, url);
-  const fetched = pickCollection(payload, "participants");
+  // ActionStep substring-matches on displayName, but displayName is stored as
+  // "Last, First" — so a search for "Peter Wallinger" never matches "Wallinger, Peter".
+  // For multi-word queries we also hit the structured lastName field with the
+  // last token, which catches the "Last, First" convention reliably.
+  const queryParts = rawQuery ? rawQuery.split(/\s+/).filter(Boolean) : [];
+  const lastToken = queryParts.length > 1 ? queryParts[queryParts.length - 1] : undefined;
+
+  const calls: Array<Promise<{ payload: unknown; status: number }>> = [];
+  if (rawQuery) {
+    calls.push(fetchWithRefresh(deps, account, buildUrl(endpoint, "/api/rest/participants", {
+      page, pageSize, displayName: rawQuery, ...sharedFilters
+    })));
+  }
+  if (lastToken) {
+    calls.push(fetchWithRefresh(deps, account, buildUrl(endpoint, "/api/rest/participants", {
+      page, pageSize, lastName: lastToken, ...sharedFilters
+    })));
+  }
+  if (calls.length === 0) {
+    calls.push(fetchWithRefresh(deps, account, buildUrl(endpoint, "/api/rest/participants", {
+      page, pageSize, ...sharedFilters
+    })));
+  }
+
+  const responses = await Promise.allSettled(calls);
+  const merged = new Map<string, Record<string, unknown>>();
+  for (const result of responses) {
+    if (result.status !== "fulfilled") continue;
+    for (const participant of pickCollection(result.value.payload, "participants")) {
+      const id = participant.id !== undefined ? String(participant.id) : JSON.stringify(participant);
+      if (!merged.has(id)) merged.set(id, participant);
+    }
+  }
+  const fetched = [...merged.values()];
 
   const filtered = isPhoneSearch
     ? fetched.filter((participant) => participantMatchesPhone(participant, phoneDigits))
@@ -548,7 +572,7 @@ async function listParticipants(
   const summaryBase = `Found ${filtered.length} participant${filtered.length === 1 ? "" : "s"} in ActionStep`;
   const summary = isPhoneSearch
     ? `${summaryBase} matching phone "${phoneQuery}" (out of ${fetched.length} on this page).`
-    : `${summaryBase}${rawQuery ? ` matching displayName containing "${rawQuery}"` : ""}.`;
+    : `${summaryBase}${rawQuery ? ` matching "${rawQuery}" (displayName${lastToken ? ` + lastName=${lastToken}` : ""})` : ""}.`;
 
   return {
     summary,
